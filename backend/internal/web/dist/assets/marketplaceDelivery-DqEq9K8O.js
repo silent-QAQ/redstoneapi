@@ -1,0 +1,1 @@
+const s=100,A=33554432;function M(_){const E=_.split(/\r?\n/).map((e,t)=>({line:t+1,content:e.trim()})).filter(({content:e})=>!!e);if(E.length>100)return{ok:!1,message:`单次最多导入 100 条库存；当前共 ${E.length} 条，请分批导入。`};const n=E.find(({content:e})=>new Blob([e]).size>33554432);return n?{ok:!1,message:`第 ${n.line} 行超过 32 MB 限制。`}:{ok:!0,lines:E}}export{s as M,A as a,M as p};

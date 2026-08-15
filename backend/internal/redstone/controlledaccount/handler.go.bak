@@ -1,0 +1,241 @@
+package controlledaccount
+
+import (
+	"encoding/json"
+	"errors"
+	"strconv"
+	"strings"
+
+	adminhandler "github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
+)
+
+// Handler exposes the administrator account-management surface under a
+// user-owned scope. The account handlers are shared; ownedAdminService injects
+// owner_user_id into creation and rejects cross-owner reads and mutations.
+type Handler struct {
+	service                 *Service
+	ownedAdminService       *ownedAdminService
+	ownedAccountHandler     *adminhandler.AccountHandler
+	ownedOAuthHandler       *adminhandler.OAuthHandler
+	ownedOpenAIHandler      *adminhandler.OpenAIOAuthHandler
+	ownedGeminiHandler      *adminhandler.GeminiOAuthHandler
+	ownedAntigravityHandler *adminhandler.AntigravityOAuthHandler
+	ownedGrokHandler        *adminhandler.GrokOAuthHandler
+	proxyHandler            *adminhandler.ProxyHandler
+	tlsFingerprintHandler   *adminhandler.TLSFingerprintProfileHandler
+	settingService          *service.SettingService
+	oauthService            *service.OAuthService
+	openaiOAuthService      *service.OpenAIOAuthService
+	geminiOAuthService      *service.GeminiOAuthService
+	antigravityOAuthService *service.AntigravityOAuthService
+	grokOAuthService        *service.GrokOAuthService
+	adminService            service.AdminService
+	oauthBindingStore       *oauthBindingStore
+	scheduledTestService    *service.ScheduledTestService
+	crsSyncService          *service.CRSSyncService
+}
+
+func NewHandler(service *Service) *Handler {
+	return &Handler{
+		service:           service,
+		oauthBindingStore: newOAuthBindingStore(),
+	}
+}
+
+func (h *Handler) List(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if !h.available(c) {
+		return
+	}
+	accounts, err := h.service.ListOwned(c.Request.Context(), subject.UserID)
+	if err != nil {
+		writeAccountError(c, err)
+		return
+	}
+	response.Success(c, accounts)
+}
+
+type createAccountPayload struct {
+	Name     string `json:"name" binding:"required,max=100"`
+	Provider string `json:"provider" binding:"required,max=50"`
+	APIKey   string `json:"api_key" binding:"required,max=20000"`
+}
+
+func (h *Handler) Create(c *gin.Context) {
+	middleware.SetAuditAction(c, "user.controlled_accounts.create")
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if !h.available(c) {
+		return
+	}
+	var payload createAccountPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		response.BadRequest(c, "Invalid account request")
+		return
+	}
+	credentials, err := json.Marshal(map[string]string{"api_key": strings.TrimSpace(payload.APIKey)})
+	// The JSON byte buffer is wiped by Service.Create. Drop the request copy as
+	// soon as it has been encoded, and never write it to an audit or application log.
+	payload.APIKey = ""
+	if err != nil {
+		response.BadRequest(c, "Invalid account credentials")
+		return
+	}
+	account, err := h.service.Create(c.Request.Context(), CreateRequest{
+		OwnerUserID:    subject.UserID,
+		Name:           strings.TrimSpace(payload.Name),
+		Provider:       strings.ToLower(strings.TrimSpace(payload.Provider)),
+		Authentication: "api_key",
+		Credentials:    credentials,
+	})
+	if err != nil {
+		writeAccountError(c, err)
+		return
+	}
+	response.Created(c, account)
+}
+
+type renameAccountPayload struct {
+	Name string `json:"name" binding:"required,max=100"`
+}
+
+func (h *Handler) Rename(c *gin.Context) {
+	middleware.SetAuditAction(c, "user.controlled_accounts.rename")
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if !h.available(c) {
+		return
+	}
+	accountID, ok := accountIDFromParam(c)
+	if !ok {
+		return
+	}
+	var payload renameAccountPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		response.BadRequest(c, "Invalid account request")
+		return
+	}
+	if err := h.service.Rename(c.Request.Context(), subject.UserID, accountID, strings.TrimSpace(payload.Name)); err != nil {
+		writeAccountError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "Account renamed"})
+}
+
+func (h *Handler) Disable(c *gin.Context) {
+	h.setDisabled(c, true)
+}
+
+func (h *Handler) Enable(c *gin.Context) {
+	h.setDisabled(c, false)
+}
+
+// Verify is an intentionally inactive extension point. The upload API and
+// response shape expose validation state now, while provider model validation
+// will be attached later without broadening the account-management boundary.
+func (h *Handler) Verify(c *gin.Context) {
+	if _, ok := middleware.GetAuthSubjectFromContext(c); !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if !h.available(c) {
+		return
+	}
+	if _, ok := accountIDFromParam(c); !ok {
+		return
+	}
+	response.Error(c, 501, "Account verification is not enabled")
+}
+
+func (h *Handler) setDisabled(c *gin.Context, disabled bool) {
+	if disabled {
+		middleware.SetAuditAction(c, "user.controlled_accounts.disable")
+	} else {
+		middleware.SetAuditAction(c, "user.controlled_accounts.enable")
+	}
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if !h.available(c) {
+		return
+	}
+	accountID, ok := accountIDFromParam(c)
+	if !ok {
+		return
+	}
+	if err := h.service.SetAPIKeyDisabled(c.Request.Context(), subject.UserID, accountID, disabled); err != nil {
+		writeAccountError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "Account lifecycle updated"})
+}
+
+func (h *Handler) Delete(c *gin.Context) {
+	middleware.SetAuditAction(c, "user.controlled_accounts.delete")
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if !h.available(c) {
+		return
+	}
+	accountID, ok := accountIDFromParam(c)
+	if !ok {
+		return
+	}
+	if err := h.service.Revoke(c.Request.Context(), subject.UserID, accountID); err != nil {
+		writeAccountError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "Account deleted"})
+}
+
+func (h *Handler) available(c *gin.Context) bool {
+	if h == nil || h.service == nil {
+		response.Error(c, 503, "User account management is unavailable")
+		return false
+	}
+	return true
+}
+
+func accountIDFromParam(c *gin.Context) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return 0, false
+	}
+	return id, true
+}
+
+func writeAccountError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		response.NotFound(c, "Account not found")
+	case errors.Is(err, ErrServiceUnavailable):
+		response.Error(c, 503, "User account management is unavailable")
+	case errors.Is(err, ErrAPIKeyOnly):
+		response.BadRequest(c, "This operation is only available for API key accounts")
+	case errors.Is(err, ErrInvalidOwner), errors.Is(err, ErrInvalidName), errors.Is(err, ErrInvalidProvider),
+		errors.Is(err, ErrInvalidAuthentication), errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrUnsupportedProvider):
+		response.BadRequest(c, "Invalid account request")
+	default:
+		response.ErrorFrom(c, err)
+	}
+}
