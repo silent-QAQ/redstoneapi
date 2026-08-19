@@ -420,6 +420,10 @@ var (
 // ErrNoAvailableAccounts 表示没有可用的账号
 var ErrNoAvailableAccounts = errors.New("no available accounts")
 
+// SharingRoomMembershipRequiredCode is returned when a room-mode API key
+// needs an account-square room membership before it can be routed.
+const SharingRoomMembershipRequiredCode = "API_KEY_SHARING_ROOM_MEMBERSHIP_REQUIRED"
+
 // ErrClaudeCodeOnly 表示分组仅允许 Claude Code 客户端访问
 var ErrClaudeCodeOnly = errors.New("this group only allows Claude Code clients")
 

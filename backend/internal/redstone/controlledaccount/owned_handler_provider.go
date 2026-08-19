@@ -9,10 +9,11 @@ import (
 
 // ProvideVerificationScheduler 提供验真调度器
 func ProvideVerificationScheduler(db *sql.DB, legacyService *Service) *VerificationScheduler {
-	_ = legacyService.cipher // unused for now
+	if db == nil || legacyService == nil {
+		return nil
+	}
 	verifier := NewAccountVerifier()
-	scheduler := NewVerificationScheduler(db, verifier, legacyService)
-	return scheduler
+	return NewVerificationScheduler(db, verifier, legacyService)
 }
 
 func ProvideHandler(
@@ -35,6 +36,8 @@ func ProvideHandler(
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	grokQuotaService *service.GrokQuotaService,
 	scheduledTestService *service.ScheduledTestService,
+	upstreamBillingProbe *service.UpstreamBillingProbeService,
+	ollamaCloudUsage *service.OllamaCloudUsageService,
 ) *Handler {
 	ownedAdminService := newOwnedAdminService(adminService, db)
 	ownedAccountHandler := adminhandler.ProvideAccountHandler(
@@ -54,17 +57,23 @@ func ProvideHandler(
 		tokenCacheInvalidator,
 		grokQuotaService,
 	)
+	ownedAccountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
+	ownedAccountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	ownedOAuthHandler := adminhandler.NewOAuthHandler(oauthService)
 	ownedOpenAIHandler := adminhandler.NewOpenAIOAuthHandler(openaiOAuthService, ownedAdminService, nil, rateLimitService)
 	ownedGeminiHandler := adminhandler.NewGeminiOAuthHandler(geminiOAuthService)
 	ownedAntigravityHandler := adminhandler.NewAntigravityOAuthHandler(antigravityOAuthService)
 	ownedGrokHandler := adminhandler.NewGrokOAuthHandler(grokOAuthService, ownedAdminService, grokQuotaService, nil)
-	
-	// 创建验真调度器
+
+	// The owned account API stores credentials in accounts.credentials, while the
+	// legacy controlled-account scheduler reads its separate encrypted store.
+	// Keep a verifier for the former and the scheduler for the latter.
+	verifier := NewAccountVerifier()
 	scheduler := ProvideVerificationScheduler(db, legacyService)
-	
+
 	return &Handler{
 		service:                 legacyService,
+		verifier:                verifier,
 		scheduler:               scheduler,
 		ownedAdminService:       ownedAdminService,
 		ownedAccountHandler:     ownedAccountHandler,

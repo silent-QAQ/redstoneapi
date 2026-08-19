@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
 	dbent "github.com/silent-QAQ/redstoneapi/ent"
 	"github.com/silent-QAQ/redstoneapi/ent/apikey"
 	"github.com/silent-QAQ/redstoneapi/ent/group"
 	"github.com/silent-QAQ/redstoneapi/ent/schema/mixins"
 	"github.com/silent-QAQ/redstoneapi/ent/user"
 	"github.com/silent-QAQ/redstoneapi/internal/service"
-	"github.com/lib/pq"
 
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/pagination"
 
@@ -1124,6 +1124,7 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		AllowLive:                       g.AllowLive,
 		RequireOAuthOnly:                g.RequireOauthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
+		AllowedOpenAIAccountLevels:      append([]string(nil), g.AllowedAccountLevels...),
 		DefaultMappedModel:              g.DefaultMappedModel,
 		MessagesDispatchModelConfig:     g.MessagesDispatchModelConfig,
 		ModelsListConfig:                g.ModelsListConfig,

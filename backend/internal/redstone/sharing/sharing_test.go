@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/shopspring/decimal"
 	infraerrors "github.com/silent-QAQ/redstoneapi/internal/pkg/errors"
 	"github.com/silent-QAQ/redstoneapi/internal/redstone/wallet"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -104,6 +104,18 @@ type ownerRoomAccountRepositoryStub struct {
 	request RoomAccountLifecycleRequest
 }
 
+type membershipLifecycleRepositoryStub struct {
+	fakeRepository
+	userID       int64
+	membershipID int64
+}
+
+func (r *membershipLifecycleRepositoryStub) LeaveMembership(_ context.Context, userID, membershipID int64) error {
+	r.userID = userID
+	r.membershipID = membershipID
+	return nil
+}
+
 func (r *ownerRoomAccountRepositoryStub) ListOwnerRoomAccounts(_ context.Context, _, _ int64, _, _ int) ([]RoomAccount, int, error) {
 	return []RoomAccount{{RoomID: 8, AccountID: 9, State: RoomAccountActive}}, 1, nil
 }
@@ -168,6 +180,16 @@ func TestRoomAccountLifecycleRejectsInvalidRequestBeforeRepository(t *testing.T)
 	_, err := service.DrainRoomAccount(context.Background(), RoomAccountLifecycleRequest{OwnerUserID: 7, RoomID: 8})
 	require.Equal(t, int32(400), infraerrors.FromError(err).Code)
 	_, _, err = service.ListOwnerRoomAccounts(context.Background(), 7, 8, 0, 0)
+	require.Equal(t, int32(400), infraerrors.FromError(err).Code)
+}
+
+func TestLeaveMembershipUsesLifecycleRepository(t *testing.T) {
+	repository := &membershipLifecycleRepositoryStub{}
+	service := &Service{repository: repository, wallet: &wallet.Service{}}
+	require.NoError(t, service.LeaveMembership(context.Background(), 7, 9))
+	require.Equal(t, int64(7), repository.userID)
+	require.Equal(t, int64(9), repository.membershipID)
+	err := service.LeaveMembership(context.Background(), 7, 0)
 	require.Equal(t, int32(400), infraerrors.FromError(err).Code)
 }
 

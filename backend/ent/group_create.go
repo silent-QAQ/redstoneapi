@@ -711,6 +711,12 @@ func (_c *GroupCreate) SetNillableRequirePrivacySet(v *bool) *GroupCreate {
 	return _c
 }
 
+// SetAllowedAccountLevels sets the "allowed_account_levels" field.
+func (_c *GroupCreate) SetAllowedAccountLevels(v []string) *GroupCreate {
+	_c.mutation.SetAllowedAccountLevels(v)
+	return _c
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_c *GroupCreate) SetDefaultMappedModel(v string) *GroupCreate {
 	_c.mutation.SetDefaultMappedModel(v)
@@ -1078,6 +1084,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultRequirePrivacySet
 		_c.mutation.SetRequirePrivacySet(v)
 	}
+	if _, ok := _c.mutation.AllowedAccountLevels(); !ok {
+		v := group.DefaultAllowedAccountLevels
+		_c.mutation.SetAllowedAccountLevels(v)
+	}
 	if _, ok := _c.mutation.DefaultMappedModel(); !ok {
 		v := group.DefaultDefaultMappedModel
 		_c.mutation.SetDefaultMappedModel(v)
@@ -1263,6 +1273,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.RequirePrivacySet(); !ok {
 		return &ValidationError{Name: "require_privacy_set", err: errors.New(`ent: missing required field "Group.require_privacy_set"`)}
+	}
+	if _, ok := _c.mutation.AllowedAccountLevels(); !ok {
+		return &ValidationError{Name: "allowed_account_levels", err: errors.New(`ent: missing required field "Group.allowed_account_levels"`)}
 	}
 	if _, ok := _c.mutation.DefaultMappedModel(); !ok {
 		return &ValidationError{Name: "default_mapped_model", err: errors.New(`ent: missing required field "Group.default_mapped_model"`)}
@@ -1531,6 +1544,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RequirePrivacySet(); ok {
 		_spec.SetField(group.FieldRequirePrivacySet, field.TypeBool, value)
 		_node.RequirePrivacySet = value
+	}
+	if value, ok := _c.mutation.AllowedAccountLevels(); ok {
+		_spec.SetField(group.FieldAllowedAccountLevels, field.TypeJSON, value)
+		_node.AllowedAccountLevels = value
 	}
 	if value, ok := _c.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)
@@ -2573,6 +2590,18 @@ func (u *GroupUpsert) SetRequirePrivacySet(v bool) *GroupUpsert {
 // UpdateRequirePrivacySet sets the "require_privacy_set" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateRequirePrivacySet() *GroupUpsert {
 	u.SetExcluded(group.FieldRequirePrivacySet)
+	return u
+}
+
+// SetAllowedAccountLevels sets the "allowed_account_levels" field.
+func (u *GroupUpsert) SetAllowedAccountLevels(v []string) *GroupUpsert {
+	u.Set(group.FieldAllowedAccountLevels, v)
+	return u
+}
+
+// UpdateAllowedAccountLevels sets the "allowed_account_levels" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateAllowedAccountLevels() *GroupUpsert {
+	u.SetExcluded(group.FieldAllowedAccountLevels)
 	return u
 }
 
@@ -3741,6 +3770,20 @@ func (u *GroupUpsertOne) SetRequirePrivacySet(v bool) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateRequirePrivacySet() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRequirePrivacySet()
+	})
+}
+
+// SetAllowedAccountLevels sets the "allowed_account_levels" field.
+func (u *GroupUpsertOne) SetAllowedAccountLevels(v []string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAllowedAccountLevels(v)
+	})
+}
+
+// UpdateAllowedAccountLevels sets the "allowed_account_levels" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateAllowedAccountLevels() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAllowedAccountLevels()
 	})
 }
 
@@ -5096,6 +5139,20 @@ func (u *GroupUpsertBulk) SetRequirePrivacySet(v bool) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateRequirePrivacySet() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRequirePrivacySet()
+	})
+}
+
+// SetAllowedAccountLevels sets the "allowed_account_levels" field.
+func (u *GroupUpsertBulk) SetAllowedAccountLevels(v []string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAllowedAccountLevels(v)
+	})
+}
+
+// UpdateAllowedAccountLevels sets the "allowed_account_levels" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateAllowedAccountLevels() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAllowedAccountLevels()
 	})
 }
 

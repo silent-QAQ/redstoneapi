@@ -16,6 +16,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func openAIAccountLevelsToDTO(levels []service.OpenAIAccountLevelConfig) []dto.OpenAIAccountLevelConfig {
+	out := make([]dto.OpenAIAccountLevelConfig, 0, len(levels)); for _, level := range service.NormalizeOpenAIAccountLevelConfigs(levels) { out = append(out, dto.OpenAIAccountLevelConfig{Key: level.Key, Label: level.Label, Aliases: level.Aliases, SortOrder: level.SortOrder, Enabled: level.Enabled}) }; return out
+}
+
 // semverPattern 预编译 semver 格式校验正则
 var semverPattern = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
@@ -133,6 +137,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 	passkeyConfigured, passkeyRPID, passkeyRPOrigins := h.settingService.PasskeyConfiguration()
 
 	payload := dto.SystemSettings{
+		OpenAIAccountLevels:                                    openAIAccountLevelsToDTO(settings.OpenAIAccountLevels),
 		RegistrationEnabled:                                    settings.RegistrationEnabled,
 		EmailVerifyEnabled:                                     settings.EmailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:                       settings.RegistrationEmailSuffixWhitelist,

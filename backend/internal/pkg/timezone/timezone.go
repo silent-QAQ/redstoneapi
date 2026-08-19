@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	// Keep IANA timezone names available in standalone Windows executables.
+	_ "time/tzdata"
 )
 
 var (

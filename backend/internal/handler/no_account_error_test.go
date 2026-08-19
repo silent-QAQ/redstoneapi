@@ -61,6 +61,22 @@ func TestClassifyNoAccountError_NilDiagnoser_Falls503(t *testing.T) {
 	require.False(t, cls.ModelNotFound)
 }
 
+func TestClassifyNoAccountError_RoomModeRequiresMembership(t *testing.T) {
+	c := newTestGinContextWithRequest()
+	roomID := int64(12)
+	apiKey := &service.APIKey{
+		GroupID:       ptrInt64(44),
+		SharingRoomID: &roomID,
+	}
+
+	cls := classifyNoAccountErrorFromGin(c, nil, apiKey, "gpt-5", "gpt-5", service.PlatformOpenAI)
+
+	require.Equal(t, http.StatusForbidden, cls.Status)
+	require.Equal(t, service.SharingRoomMembershipRequiredCode, cls.ErrType)
+	require.Equal(t, "请在账号广场加入房间", cls.Message)
+	require.False(t, cls.ModelNotFound)
+}
+
 func TestClassifyNoAccountError_NilAPIKey_Falls503(t *testing.T) {
 	c := newTestGinContextWithRequest()
 	fd := &fakeDiagnoser{resp: service.ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: false}}

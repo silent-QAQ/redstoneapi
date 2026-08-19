@@ -7,14 +7,15 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/gin-gonic/gin"
 	adminhandler "github.com/silent-QAQ/redstoneapi/internal/handler/admin"
 	"github.com/silent-QAQ/redstoneapi/internal/handler/dto"
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/openai"
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/response"
 	"github.com/silent-QAQ/redstoneapi/internal/server/middleware"
 	"github.com/silent-QAQ/redstoneapi/internal/service"
-	"github.com/gin-gonic/gin"
 )
 
 func (h *Handler) ListOwnedAccounts(c *gin.Context) {
@@ -424,10 +425,80 @@ func (h *Handler) CheckOwnedMixedChannel(c *gin.Context) {
 }
 
 func (h *Handler) OwnedVerify(c *gin.Context) {
-	if _, ok := accountIDFromParam(c); !ok {
+	middleware.SetAuditAction(c, "user.accounts.verify")
+	accountID, ok := accountIDFromParam(c)
+	if !ok {
 		return
 	}
-	response.Error(c, 501, "Account verification is not enabled")
+	if h.ownedAdminService == nil || h.verifier == nil {
+		response.Error(c, 503, "Account verification is unavailable")
+		return
+	}
+
+	// GetAccount is owner-scoped by ownedAdminService, so the account ID from
+	// the path can never be used to probe another user's credential.
+	account, err := h.ownedAdminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if account == nil || account.Type != service.AccountTypeAPIKey {
+		response.BadRequest(c, "This operation is only available for API key accounts")
+		return
+	}
+
+	apiKey := strings.TrimSpace(account.GetCredential("api_key"))
+	if apiKey == "" {
+		response.BadRequest(c, "API key is required for model verification")
+		return
+	}
+
+	result := h.verifier.VerifyWithCredentials(
+		c.Request.Context(),
+		account.Platform,
+		apiKey,
+		ownedVerificationBaseURL(account),
+	)
+	if err := h.ownedAdminService.UpdateAccountExtra(c.Request.Context(), accountID, map[string]any{
+		"model_verification_status":   result.Verdict,
+		"model_verification_verdict":  result.Verdict,
+		"model_verification_score":    result.Score,
+		"model_verification_protocol": result.Protocol,
+		"model_verification_at":       result.Timestamp.UTC().Format(time.RFC3339),
+	}); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"account_id":  accountID,
+		"success":     result.Success,
+		"score":       result.Score,
+		"verdict":     result.Verdict,
+		"protocol":    result.Protocol,
+		"message":     result.Message,
+		"timestamp":   result.Timestamp,
+		"duration_ms": result.DurationMs,
+	})
+}
+
+func ownedVerificationBaseURL(account *service.Account) string {
+	if account == nil {
+		return ""
+	}
+	switch account.Platform {
+	case service.PlatformAnthropic:
+		return account.GetBaseURL()
+	case service.PlatformGemini, service.PlatformAntigravity:
+		return account.GetGeminiBaseURL("https://generativelanguage.googleapis.com")
+	case service.PlatformGrok:
+		if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
+			return baseURL
+		}
+		return "https://api.x.ai"
+	default:
+		return account.GetOpenAIBaseURL()
+	}
 }
 
 func (h *Handler) ListAccountOptionsGroups(c *gin.Context) {

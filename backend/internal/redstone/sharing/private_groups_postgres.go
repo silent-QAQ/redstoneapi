@@ -361,6 +361,78 @@ func (r *PostgresRepository) bindRoomPrivateGroup(ctx context.Context, tx *sql.T
 	return nil
 }
 
+// ensureRoomPrivateGroup resolves the internal exclusive group used by a
+// sharing room. The caller holds the room row lock, so the first account
+// binding can create and attach the group atomically without a race.
+//
+// PrivateGroupID is retained only for backwards compatibility with older API
+// clients. The account editor deliberately does not expose this implementation
+// detail: a room owns exactly one such group.
+func (r *PostgresRepository) ensureRoomPrivateGroup(ctx context.Context, tx *sql.Tx, roomID, ownerUserID, requestedGroupID int64, platform string) (int64, error) {
+	if requestedGroupID > 0 {
+		if err := r.bindRoomPrivateGroup(ctx, tx, roomID, ownerUserID, requestedGroupID, platform); err != nil {
+			return 0, err
+		}
+		return requestedGroupID, nil
+	}
+
+	if groupID, found, err := r.roomPrivateGroupBinding(ctx, tx, roomID); err != nil {
+		return 0, err
+	} else if found {
+		if err := r.bindRoomPrivateGroup(ctx, tx, roomID, ownerUserID, groupID, platform); err != nil {
+			return 0, err
+		}
+		return groupID, nil
+	}
+
+	backingName := fmt.Sprintf("redstone-room-%d-%s", roomID, uuid.NewString())
+	displayName := backingName
+	description := "Internal authorization group for account sharing room"
+	idempotencyKey := fmt.Sprintf("room-private-group:%d", roomID)
+	request := CreatePrivateGroupRequest{
+		OwnerUserID:    ownerUserID,
+		Name:           displayName,
+		Description:    description,
+		Platform:       platform,
+		IdempotencyKey: idempotencyKey,
+	}
+
+	var groupID int64
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO groups (name, description, rate_multiplier, is_exclusive, status, platform)
+		VALUES ($1, $2, 1, TRUE, 'active', $3)
+		RETURNING id`, backingName, description, platform).Scan(&groupID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO redstone_private_groups
+			(group_id, owner_user_id, name, platform, status, idempotency_key, request_fingerprint)
+		VALUES ($1, $2, $3, $4, 'active', $5, $6)`,
+		groupID, ownerUserID, displayName, platform, idempotencyKey, privateGroupFingerprintHash(request),
+	); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO user_allowed_groups (user_id, group_id) VALUES ($1, $2)
+		ON CONFLICT (user_id, group_id) DO NOTHING`, ownerUserID, groupID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO redstone_private_group_members (group_id, user_id, role, status)
+		VALUES ($1, $2, 'owner', 'active')`, groupID, ownerUserID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO redstone_account_share_room_private_groups (room_id, group_id)
+		VALUES ($1, $2)`, roomID, groupID); err != nil {
+		return 0, err
+	}
+	if err := appendPrivateGroupAudit(ctx, tx, groupID, ownerUserID, "room_private_group_created", fmt.Sprint(roomID)); err != nil {
+		return 0, err
+	}
+	return groupID, nil
+}
+
 func (r *PostgresRepository) activeRoomPrivateGroup(ctx context.Context, tx *sql.Tx, roomID int64) (int64, error) {
 	var groupID int64
 	err := tx.QueryRowContext(ctx, `

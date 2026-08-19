@@ -5,16 +5,22 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
-	"github.com/silent-QAQ/redstoneapi/internal/redstone/wallet"
 	"github.com/shopspring/decimal"
+	"github.com/silent-QAQ/redstoneapi/internal/redstone/wallet"
+	"github.com/silent-QAQ/redstoneapi/internal/service"
 )
 
 // PostgresRepository owns the sharing state machine. Account credentials and
 // scheduling stay in sub2's accounts domain; this repository reads accounts
 // only to verify the owner before a room can bind one.
-type PostgresRepository struct{ db *sql.DB }
+type PostgresRepository struct {
+	db             *sql.DB
+	settingService *service.SettingService
+}
 
 func NewPostgresRepository(db *sql.DB) (*PostgresRepository, error) {
 	if db == nil {
@@ -23,15 +29,135 @@ func NewPostgresRepository(db *sql.DB) (*PostgresRepository, error) {
 	return &PostgresRepository{db: db}, nil
 }
 
+func NewPostgresRepositoryWithSettings(db *sql.DB, settingService *service.SettingService) (*PostgresRepository, error) {
+	repository, err := NewPostgresRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	repository.settingService = settingService
+	return repository, nil
+}
+
 func (r *PostgresRepository) ListPublicRooms(ctx context.Context, limit, offset int) ([]Room, int, error) {
-	return r.listRooms(ctx, `r.visibility = 'public' AND r.status = 'active' AND r.deleted_at IS NULL`, nil, limit, offset)
+	return r.ListPublicRoomsFiltered(ctx, PublicRoomFilter{}, limit, offset)
+}
+
+func (r *PostgresRepository) ListPublicRoomsFiltered(ctx context.Context, filter PublicRoomFilter, limit, offset int) ([]Room, int, error) {
+	if !validPage(limit, offset) {
+		return nil, 0, ErrInvalidPagination
+	}
+	if err := filter.NormalizeAndValidate(); err != nil {
+		return nil, 0, err
+	}
+	where := []string{`r.visibility = 'public'`, `r.status = 'active'`, `r.deleted_at IS NULL`}
+	args := make([]any, 0, 3)
+	bind := func(value any) string { args = append(args, value); return fmt.Sprintf("$%d", len(args)) }
+	if filter.Search != "" {
+		p := bind("%" + filter.Search + "%")
+		where = append(where, "(r.name ILIKE "+p+" OR r.description ILIKE "+p+")")
+	}
+	if filter.Platform != "" {
+		where = append(where, "r.platform = "+bind(filter.Platform))
+	}
+	levelRanks := r.accountLevelRanks(ctx)
+	gradeRank := accountLevelRankSQL("a.account_level", levelRanks)
+	lowestRank := "(SELECT COALESCE(MIN(" + gradeRank + "), 0) FROM redstone_account_share_room_accounts gra LEFT JOIN accounts a ON a.id = gra.account_id WHERE gra.room_id = r.id AND gra.state IN ('active', 'draining'))"
+	if filter.AccountGrade != "" {
+		rank, found := levelRanks[strings.ToLower(filter.AccountGrade)]
+		if !found {
+			return nil, 0, ErrInvalidRoom
+		}
+		where = append(where, lowestRank+" = "+bind(rank))
+	}
+	if filter.VerifiedOnly {
+		where = append(where, verificationFilterSQL())
+	}
+	if filter.AvailableOnly {
+		where = append(where, availabilityFilterSQL())
+	}
+	sortColumn := map[string]string{"updated_at": "r.updated_at", "rate_multiplier": "r.room_rate_multiplier", "hourly_fee": "r.hourly_fee", "hourly_fee_free_threshold": "r.hourly_fee_free_threshold"}[filter.SortBy]
+	direction := "DESC"
+	if filter.SortOrder == "asc" {
+		direction = "ASC"
+	}
+	return r.listRooms(ctx, strings.Join(where, " AND "), args, limit, offset, sortColumn+" "+direction+", r.id "+direction, accountLevelRankSQL("level_a.account_level", levelRanks))
+}
+
+func (r *PostgresRepository) accountLevelRanks(ctx context.Context) map[string]int {
+	configs := service.DefaultOpenAIAccountLevelConfigs()
+	if r.settingService != nil {
+		configs = r.settingService.OpenAIAccountLevelConfigs(ctx)
+	}
+	ranks := make(map[string]int, len(configs))
+	for _, config := range configs {
+		if config.Enabled {
+			ranks[strings.ToLower(config.Key)] = config.SortOrder
+		}
+	}
+	return ranks
+}
+
+func accountLevelRankSQL(column string, ranks map[string]int) string {
+	keys := make([]string, 0, len(ranks))
+	for key := range ranks {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var builder strings.Builder
+	builder.WriteString("CASE LOWER(COALESCE(")
+	builder.WriteString(column)
+	builder.WriteString(", 'unknown'))")
+	for _, key := range keys {
+		builder.WriteString(" WHEN '")
+		builder.WriteString(strings.ReplaceAll(key, "'", "''"))
+		builder.WriteString("' THEN ")
+		builder.WriteString(fmt.Sprint(ranks[key]))
+	}
+	builder.WriteString(" ELSE 0 END")
+	return builder.String()
+}
+
+func verificationFilterSQL() string {
+	return `EXISTS (
+		SELECT 1 FROM redstone_account_share_room_accounts verified_ra
+		WHERE verified_ra.room_id = r.id AND verified_ra.state IN ('active', 'draining')
+	) AND NOT EXISTS (
+		SELECT 1
+		FROM redstone_account_share_room_accounts unverified_ra
+		JOIN accounts unverified_a ON unverified_a.id = unverified_ra.account_id
+		WHERE unverified_ra.room_id = r.id
+		  AND unverified_ra.state IN ('active', 'draining')
+		  AND unverified_a.type = 'apikey'
+		  AND NOT (
+			LOWER(COALESCE(unverified_a.extra ->> 'model_verification_enabled', '')) IN ('true', '1')
+			AND (
+				COALESCE(unverified_a.extra ->> 'model_verification_status', '') IN ('passed', 'marginal')
+				OR COALESCE(unverified_a.extra ->> 'model_verification_verdict', '') IN ('passed', 'marginal')
+			)
+		  )
+	)`
+}
+
+func availabilityFilterSQL() string {
+	return `EXISTS (
+		SELECT 1
+		FROM redstone_account_share_room_accounts available_ra
+		JOIN accounts available_a ON available_a.id = available_ra.account_id
+		WHERE available_ra.room_id = r.id
+		  AND available_ra.state = 'active'
+		  AND available_a.deleted_at IS NULL
+		  AND available_a.status = 'active'
+	) AND (
+		SELECT COUNT(*) FROM redstone_account_share_memberships available_m
+		WHERE available_m.room_id = r.id AND available_m.status IN ('active', 'ending')
+	) < r.seat_limit`
 }
 
 func (r *PostgresRepository) ListOwnerRooms(ctx context.Context, ownerUserID int64, limit, offset int) ([]Room, int, error) {
-	return r.listRooms(ctx, `r.owner_user_id = $1 AND r.deleted_at IS NULL`, []any{ownerUserID}, limit, offset)
+	return r.listRooms(ctx, `r.owner_user_id = $1 AND r.deleted_at IS NULL`, []any{ownerUserID}, limit, offset, "r.updated_at DESC, r.id DESC", accountLevelRankSQL("level_a.account_level", r.accountLevelRanks(ctx)))
 }
 
-func (r *PostgresRepository) listRooms(ctx context.Context, where string, args []any, limit, offset int) ([]Room, int, error) {
+func (r *PostgresRepository) listRooms(ctx context.Context, where string, args []any, limit, offset int, orderBy, lowestLevelRank string) ([]Room, int, error) {
 	var total int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM redstone_account_share_rooms r WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -40,19 +166,45 @@ func (r *PostgresRepository) listRooms(ctx context.Context, where string, args [
 	query := `
 		SELECT r.id, r.owner_user_id, r.name, r.description, r.platform, r.visibility, r.status,
 		       r.requires_approval, r.seat_limit, r.lease_seconds, r.idle_timeout_seconds,
-		       r.lease_price, r.platform_fee_rate, r.created_at, r.updated_at,
+		       r.lease_price, r.room_rate_multiplier, r.hourly_fee, r.hourly_fee_free_threshold, r.platform_fee_rate, r.created_at, r.updated_at,
 		       COUNT(DISTINCT ra.account_id) FILTER (WHERE ra.state = 'active'),
 		       COUNT(DISTINCT m.id) FILTER (WHERE m.status IN ('active', 'ending')),
 		       COALESCE(AVG(rv.rating) FILTER (WHERE rv.moderation_status = 'visible'), 0),
-		       COUNT(DISTINCT rv.id) FILTER (WHERE rv.moderation_status = 'visible')
+		       COUNT(DISTINCT rv.id) FILTER (WHERE rv.moderation_status = 'visible'),
+		       COALESCE((SELECT COALESCE(NULLIF(LOWER(level_a.account_level), ''), 'unknown') FROM redstone_account_share_room_accounts level_ra JOIN accounts level_a ON level_a.id = level_ra.account_id WHERE level_ra.room_id = r.id AND level_ra.state IN ('active', 'draining') ORDER BY __LOWEST_LEVEL_RANK__, level_ra.account_id LIMIT 1), 'unknown'),
+		       (
+			COUNT(DISTINCT ra.account_id) FILTER (WHERE ra.state IN ('active', 'draining')) > 0
+			AND COUNT(DISTINCT ra.account_id) FILTER (
+				WHERE ra.state IN ('active', 'draining')
+				  AND a.type = 'apikey'
+				  AND NOT (
+					LOWER(COALESCE(a.extra ->> 'model_verification_enabled', '')) IN ('true', '1')
+					AND (
+						COALESCE(a.extra ->> 'model_verification_status', '') IN ('passed', 'marginal')
+						OR COALESCE(a.extra ->> 'model_verification_verdict', '') IN ('passed', 'marginal')
+					)
+				  )
+			) = 0
+		),
+		       (
+			COUNT(DISTINCT ra.account_id) FILTER (
+				WHERE ra.state = 'active' AND a.deleted_at IS NULL AND a.status = 'active'
+			) > 0
+			AND COUNT(DISTINCT m.id) FILTER (WHERE m.status IN ('active', 'ending')) < r.seat_limit
+		),
+		       COUNT(DISTINCT ra.account_id) FILTER (
+			WHERE ra.state = 'active' AND a.deleted_at IS NULL AND a.status = 'active'
+		) > 0
 		FROM redstone_account_share_rooms r
 		LEFT JOIN redstone_account_share_room_accounts ra ON ra.room_id = r.id
+		LEFT JOIN accounts a ON a.id = ra.account_id
 		LEFT JOIN redstone_account_share_memberships m ON m.room_id = r.id
 		LEFT JOIN redstone_account_share_reviews rv ON rv.room_id = r.id
 		WHERE ` + where + `
 		GROUP BY r.id
-		ORDER BY r.updated_at DESC, r.id DESC
+		ORDER BY ` + orderBy + `
 		LIMIT $` + fmt.Sprint(len(args)-1) + ` OFFSET $` + fmt.Sprint(len(args))
+	query = strings.Replace(query, "__LOWEST_LEVEL_RANK__", lowestLevelRank, 1)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
@@ -75,10 +227,24 @@ func (r *PostgresRepository) ListUserMemberships(ctx context.Context, userID int
 		return nil, 0, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, room_id, user_id, status, queued_at, joined_at, ended_at, end_reason
-		FROM redstone_account_share_memberships
-		WHERE user_id = $1
-		ORDER BY updated_at DESC, id DESC
+		SELECT m.id, m.room_id, m.user_id, m.status, m.queued_at, m.joined_at, m.ended_at, m.end_reason,
+		       l.id, l.room_id, l.membership_id, l.account_id, l.user_id, l.state,
+		       l.granted_at, l.heartbeat_at, l.expires_at, l.released_at, l.release_reason
+		FROM redstone_account_share_memberships m
+		LEFT JOIN LATERAL (
+			SELECT l.id, l.room_id, l.membership_id, l.account_id, l.user_id, l.state,
+			       l.granted_at, l.heartbeat_at, l.expires_at, l.released_at, l.release_reason
+			FROM redstone_account_share_leases l
+			JOIN redstone_account_share_rooms r ON r.id = l.room_id
+			WHERE l.membership_id = m.id
+			  AND l.state = 'active'
+			  AND l.expires_at > NOW()
+			  AND l.heartbeat_at + (r.idle_timeout_seconds * INTERVAL '1 second') > NOW()
+			ORDER BY l.id DESC
+			LIMIT 1
+		) l ON TRUE
+		WHERE m.user_id = $1
+		ORDER BY m.updated_at DESC, m.id DESC
 		LIMIT $2 OFFSET $3`, userID, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -86,13 +252,107 @@ func (r *PostgresRepository) ListUserMemberships(ctx context.Context, userID int
 	defer rows.Close()
 	items := make([]Membership, 0)
 	for rows.Next() {
-		item, err := scanMembership(rows)
+		item, err := scanMembershipWithLease(rows)
 		if err != nil {
 			return nil, 0, err
 		}
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
+}
+
+// LeaveMembership cancels a queued request or ends an active room membership.
+// For active memberships, lease release, access revocation, and queue promotion
+// share one transaction so a departed user never retains an account route.
+func (r *PostgresRepository) LeaveMembership(ctx context.Context, userID, membershipID int64) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var roomID int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT room_id FROM redstone_account_share_memberships
+		WHERE id = $1 AND user_id = $2`, membershipID, userID).Scan(&roomID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrMembershipNotFound
+	}
+	if err != nil {
+		return err
+	}
+	var lockedRoomID int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT id FROM redstone_account_share_rooms
+		WHERE id = $1 FOR UPDATE`, roomID).Scan(&lockedRoomID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrMembershipNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	var membership Membership
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, room_id, user_id, status, queued_at, joined_at, ended_at, end_reason
+		FROM redstone_account_share_memberships
+		WHERE id = $1 AND user_id = $2 FOR UPDATE`, membershipID, userID).Scan(
+		&membership.ID, &membership.RoomID, &membership.UserID, &membership.Status, &membership.QueuedAt,
+		&membership.JoinedAt, &membership.EndedAt, &membership.EndReason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrMembershipNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	switch membership.Status {
+	case MembershipQueued:
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE redstone_account_share_memberships
+			SET status = 'revoked', ended_at = NOW(), end_reason = $2, updated_at = NOW()
+			WHERE id = $1 AND status = 'queued'`, membership.ID, "user_cancelled"); err != nil {
+			return err
+		}
+		if err := appendAudit(ctx, tx, roomID, userID, "membership_cancelled", fmt.Sprint(membership.ID)); err != nil {
+			return err
+		}
+	case MembershipActive, MembershipEnding:
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE redstone_account_share_leases
+			SET state = 'released', released_at = NOW(), release_reason = $3, updated_at = NOW()
+			WHERE membership_id = $1 AND user_id = $2 AND state = 'active'`, membership.ID, userID, "user_left"); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE redstone_account_share_memberships
+			SET status = 'ended', ended_at = NOW(), end_reason = $2, updated_at = NOW()
+			WHERE id = $1 AND status IN ('active', 'ending')`, membership.ID, "user_left"); err != nil {
+			return err
+		}
+		if err := revokeActiveShareGroupAccess(ctx, tx, membership.ID, userID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			WITH next_member AS (
+				SELECT id FROM redstone_account_share_memberships
+				WHERE room_id = $1 AND status = 'queued'
+				ORDER BY queued_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
+			)
+			UPDATE redstone_account_share_memberships m
+			SET status = 'active', joined_at = NOW(), updated_at = NOW()
+			FROM next_member WHERE m.id = next_member.id`, roomID); err != nil {
+			return err
+		}
+		if err := appendAudit(ctx, tx, roomID, userID, "membership_left", fmt.Sprint(membership.ID)); err != nil {
+			return err
+		}
+	case MembershipEnded, MembershipRevoked:
+		return tx.Commit()
+	default:
+		return ErrInvalidMembership
+	}
+	return tx.Commit()
 }
 
 func (r *PostgresRepository) ListOwnerRoomMemberships(ctx context.Context, ownerUserID, roomID int64, status MembershipStatus, limit, offset int) ([]Membership, int, error) {
@@ -183,23 +443,22 @@ func (r *PostgresRepository) CreateRoom(ctx context.Context, request CreateRoomR
 		return Room{}, ErrRoomUnavailable
 	}
 
+	// Room creation is immediately active. Member admission is determined only
+	// by visibility and seat capacity; approval is no longer a room feature.
 	status := RoomActive
-	if request.Visibility == VisibilityPublic {
-		status = RoomPendingReview
-	}
 	var room Room
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO redstone_account_share_rooms
 		(owner_user_id, name, description, platform, visibility, status, requires_approval,
-		 seat_limit, lease_seconds, idle_timeout_seconds, lease_price, platform_fee_rate)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		 seat_limit, lease_seconds, idle_timeout_seconds, lease_price, room_rate_multiplier, hourly_fee, hourly_fee_free_threshold, platform_fee_rate)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id, owner_user_id, name, description, platform, visibility, status,
 		          requires_approval, seat_limit, lease_seconds, idle_timeout_seconds,
-		          lease_price, platform_fee_rate, created_at, updated_at`,
+		          lease_price, room_rate_multiplier, hourly_fee, hourly_fee_free_threshold, platform_fee_rate, created_at, updated_at`,
 		request.OwnerUserID, strings.TrimSpace(request.Name), strings.TrimSpace(request.Description), strings.TrimSpace(request.Platform),
-		request.Visibility, status, request.RequiresApproval, request.SeatLimit, request.LeaseSeconds, request.IdleTimeoutSeconds, request.LeasePrice, platformFee,
+		request.Visibility, status, false, request.SeatLimit, request.LeaseSeconds, request.IdleTimeoutSeconds, request.LeasePrice, normalizedMultiplier(request.RoomRateMultiplier), request.HourlyFee, request.HourlyFeeFreeThreshold, platformFee,
 	).Scan(&room.ID, &room.OwnerUserID, &room.Name, &room.Description, &room.Platform, &room.Visibility, &room.Status,
-		&room.RequiresApproval, &room.SeatLimit, &room.LeaseSeconds, &room.IdleTimeoutSeconds, &room.LeasePrice, &room.PlatformFeeRate,
+		&room.RequiresApproval, &room.SeatLimit, &room.LeaseSeconds, &room.IdleTimeoutSeconds, &room.LeasePrice, &room.RoomRateMultiplier, &room.HourlyFee, &room.HourlyFeeFreeThreshold, &room.PlatformFeeRate,
 		&room.CreatedAt, &room.UpdatedAt)
 	if err != nil {
 		return Room{}, err
@@ -272,15 +531,15 @@ func (r *PostgresRepository) UpdateRoom(ctx context.Context, request UpdateRoomR
 		UPDATE redstone_account_share_rooms
 		SET name = $3, description = $4, visibility = $5, requires_approval = $6,
 		    seat_limit = $7, lease_seconds = $8, idle_timeout_seconds = $9,
-		    lease_price = $10, status = $11, updated_at = NOW()
+		    lease_price = $10, room_rate_multiplier = $11, hourly_fee = $12, hourly_fee_free_threshold = $13, status = $14, updated_at = NOW()
 		WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
 		RETURNING id, owner_user_id, name, description, platform, visibility, status,
 		          requires_approval, seat_limit, lease_seconds, idle_timeout_seconds,
-		          lease_price, platform_fee_rate, created_at, updated_at`,
+		          lease_price, room_rate_multiplier, hourly_fee, hourly_fee_free_threshold, platform_fee_rate, created_at, updated_at`,
 		request.RoomID, request.OwnerUserID, strings.TrimSpace(request.Name), strings.TrimSpace(request.Description),
-		request.Visibility, request.RequiresApproval, request.SeatLimit, request.LeaseSeconds, request.IdleTimeoutSeconds, request.LeasePrice, nextStatus).
+		request.Visibility, false, request.SeatLimit, request.LeaseSeconds, request.IdleTimeoutSeconds, request.LeasePrice, normalizedMultiplier(request.RoomRateMultiplier), request.HourlyFee, request.HourlyFeeFreeThreshold, nextStatus).
 		Scan(&room.ID, &room.OwnerUserID, &room.Name, &room.Description, &room.Platform, &room.Visibility, &room.Status,
-			&room.RequiresApproval, &room.SeatLimit, &room.LeaseSeconds, &room.IdleTimeoutSeconds, &room.LeasePrice, &room.PlatformFeeRate,
+			&room.RequiresApproval, &room.SeatLimit, &room.LeaseSeconds, &room.IdleTimeoutSeconds, &room.LeasePrice, &room.RoomRateMultiplier, &room.HourlyFee, &room.HourlyFeeFreeThreshold, &room.PlatformFeeRate,
 			&room.CreatedAt, &room.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Room{}, ErrRoomForbidden
@@ -312,6 +571,9 @@ func (r *PostgresRepository) CloseRoom(ctx context.Context, ownerUserID, roomID 
 		return err
 	}
 	if status == RoomClosed {
+		if err := r.removeRoomAccountAssignments(ctx, tx, roomID); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 	var activeMembers int
@@ -329,6 +591,9 @@ func (r *PostgresRepository) CloseRoom(ctx context.Context, ownerUserID, roomID 
 		WHERE room_id = $1 AND status = 'queued'`, roomID); err != nil {
 		return err
 	}
+	if err := r.removeRoomAccountAssignments(ctx, tx, roomID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE redstone_account_share_rooms
 		SET status = 'closed', updated_at = NOW()
@@ -336,6 +601,64 @@ func (r *PostgresRepository) CloseRoom(ctx context.Context, ownerUserID, roomID 
 		return err
 	}
 	if err := appendAudit(ctx, tx, roomID, ownerUserID, "room_closed", ""); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DeleteRoom makes a closed room invisible to all operational queries while
+// retaining immutable membership, billing, and audit history. Account bindings
+// are already released by CloseRoom; the defensive cleanup keeps old data from
+// blocking a future account migration.
+func (r *PostgresRepository) DeleteRoom(ctx context.Context, ownerUserID, roomID int64) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var status RoomStatus
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status FROM redstone_account_share_rooms
+		WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL FOR UPDATE`, roomID, ownerUserID).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+		return ErrRoomForbidden
+	} else if err != nil {
+		return err
+	}
+	if status != RoomClosed {
+		return ErrRoomMustBeClosed
+	}
+	var activeMembers int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM redstone_account_share_memberships
+		WHERE room_id = $1 AND status IN ('active', 'ending')`, roomID).Scan(&activeMembers); err != nil {
+		return err
+	}
+	if activeMembers > 0 {
+		return ErrRoomHasActiveLeases
+	}
+	if err := r.removeRoomAccountAssignments(ctx, tx, roomID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE api_keys key
+		SET group_id = NULL, updated_at = NOW()
+		FROM redstone_api_key_room_bindings binding
+		WHERE binding.room_id = $1 AND binding.api_key_id = key.id
+		  AND key.group_id = binding.group_id`, roomID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM redstone_api_key_room_bindings WHERE room_id = $1`, roomID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE redstone_account_share_rooms
+		SET deleted_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND owner_user_id = $2 AND status = 'closed'`, roomID, ownerUserID); err != nil {
+		return err
+	}
+	if err := appendAudit(ctx, tx, roomID, ownerUserID, "room_deleted", ""); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -368,9 +691,6 @@ func (r *PostgresRepository) BindAccount(ctx context.Context, request BindAccoun
 	if accountPlatform != platform {
 		return ErrInvalidAccount
 	}
-	if err := r.bindRoomPrivateGroup(ctx, tx, request.RoomID, request.OwnerUserID, request.PrivateGroupID, platform); err != nil {
-		return err
-	}
 	var escrowed bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS(
@@ -381,6 +701,12 @@ func (r *PostgresRepository) BindAccount(ctx context.Context, request BindAccoun
 	}
 	if escrowed {
 		return ErrAccountAlreadyBound
+	}
+	if err := r.releaseClosedRoomAccountBindings(ctx, tx, request.AccountID, request.OwnerUserID); err != nil {
+		return err
+	}
+	if err := r.migrateAccountBinding(ctx, tx, request); err != nil {
+		return err
 	}
 	var maxAccounts int
 	if err := tx.QueryRowContext(ctx, `
@@ -399,22 +725,153 @@ func (r *PostgresRepository) BindAccount(ctx context.Context, request BindAccoun
 	if boundAccounts >= maxAccounts {
 		return ErrQuotaExceeded
 	}
+	privateGroupID, err := r.ensureRoomPrivateGroup(ctx, tx, request.RoomID, request.OwnerUserID, request.PrivateGroupID, platform)
+	if err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO redstone_account_share_room_accounts (room_id, account_id)
-		VALUES ($1, $2)`, request.RoomID, request.AccountID)
+		VALUES ($1, $2)
+		ON CONFLICT (room_id, account_id) DO UPDATE
+		SET state = 'active', bound_at = NOW(), unbound_at = NULL
+		WHERE redstone_account_share_room_accounts.state = 'removed'`, request.RoomID, request.AccountID)
 	if err != nil {
 		return ErrAccountAlreadyBound
 	}
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO account_groups (account_id, group_id)
 		VALUES ($1, $2)
-		ON CONFLICT (account_id, group_id) DO NOTHING`, request.AccountID, request.PrivateGroupID); err != nil {
+		ON CONFLICT (account_id, group_id) DO NOTHING`, request.AccountID, privateGroupID); err != nil {
 		return err
 	}
 	if err := appendAudit(ctx, tx, request.RoomID, request.OwnerUserID, "account_bound", fmt.Sprint(request.AccountID)); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// migrateAccountBinding lets an owner move an idle account between their own
+// rooms without exposing a half-unbound state. Accounts with a live lease stay
+// put so an existing member never loses the account currently serving them.
+func (r *PostgresRepository) migrateAccountBinding(ctx context.Context, tx *sql.Tx, request BindAccountRequest) error {
+	var sourceRoomID int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT binding.room_id
+		FROM redstone_account_share_room_accounts binding
+		JOIN redstone_account_share_rooms room ON room.id = binding.room_id
+		WHERE binding.account_id = $1 AND binding.state IN ('active', 'draining')
+		  AND room.deleted_at IS NULL
+		ORDER BY binding.bound_at DESC
+		LIMIT 1 FOR UPDATE OF binding, room`, request.AccountID).Scan(&sourceRoomID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if sourceRoomID == request.RoomID {
+		return nil
+	}
+	var sourceOwnerID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT owner_user_id FROM redstone_account_share_rooms
+		WHERE id = $1 FOR UPDATE`, sourceRoomID).Scan(&sourceOwnerID); err != nil {
+		return err
+	}
+	if sourceOwnerID != request.OwnerUserID {
+		return ErrAccountAlreadyBound
+	}
+	var activeLeaseID int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT id FROM redstone_account_share_leases
+		WHERE room_id = $1 AND account_id = $2 AND state = 'active'
+		ORDER BY id LIMIT 1 FOR UPDATE`, sourceRoomID, request.AccountID).Scan(&activeLeaseID)
+	if err == nil {
+		return ErrRoomAccountHasActiveLease
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE redstone_account_share_room_accounts
+		SET state = 'removed', unbound_at = NOW()
+		WHERE room_id = $1 AND account_id = $2 AND state IN ('active', 'draining')`, sourceRoomID, request.AccountID); err != nil {
+		return err
+	}
+	if sourceGroupID, found, err := r.roomPrivateGroupBinding(ctx, tx, sourceRoomID); err != nil {
+		return err
+	} else if found {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id = $1 AND group_id = $2`, request.AccountID, sourceGroupID); err != nil {
+			return err
+		}
+	}
+	return appendAudit(ctx, tx, sourceRoomID, request.OwnerUserID, "account_migrated_out", fmt.Sprint(request.AccountID))
+}
+
+// removeRoomAccountAssignments releases all accounts from a closed room. A
+// closed room cannot schedule new leases, so retaining its live bindings would
+// incorrectly block those accounts from being added to another room.
+func (r *PostgresRepository) removeRoomAccountAssignments(ctx context.Context, tx *sql.Tx, roomID int64) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE redstone_account_share_room_accounts
+		SET state = 'removed', unbound_at = NOW()
+		WHERE room_id = $1 AND state IN ('active', 'draining')`, roomID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+		DELETE FROM account_groups account_group
+		USING redstone_account_share_room_private_groups room_group
+		WHERE room_group.room_id = $1 AND account_group.group_id = room_group.group_id`, roomID)
+	return err
+}
+
+// releaseClosedRoomAccountBindings repairs bindings created before room closing
+// released its accounts. It only touches closed or deleted rooms, never a
+// room that could still resume serving traffic.
+func (r *PostgresRepository) releaseClosedRoomAccountBindings(ctx context.Context, tx *sql.Tx, accountID, actorUserID int64) error {
+	rows, err := tx.QueryContext(ctx, `
+		UPDATE redstone_account_share_room_accounts binding
+		SET state = 'removed', unbound_at = NOW()
+		FROM redstone_account_share_rooms room
+		WHERE binding.account_id = $1 AND binding.room_id = room.id
+		  AND binding.state IN ('active', 'draining')
+		  AND (room.status = 'closed' OR room.deleted_at IS NOT NULL)
+		RETURNING binding.room_id`, accountID)
+	if err != nil {
+		return err
+	}
+	roomIDs := make([]int64, 0, 1)
+	for rows.Next() {
+		var roomID int64
+		if err := rows.Scan(&roomID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		roomIDs = append(roomIDs, roomID)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(roomIDs) == 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM account_groups account_group
+		USING redstone_account_share_room_private_groups room_group
+		JOIN redstone_account_share_rooms room ON room.id = room_group.room_id
+		WHERE account_group.account_id = $1 AND account_group.group_id = room_group.group_id
+		  AND (room.status = 'closed' OR room.deleted_at IS NOT NULL)`, accountID); err != nil {
+		return err
+	}
+	for _, roomID := range roomIDs {
+		if err := appendAudit(ctx, tx, roomID, actorUserID, "account_released_from_closed_room", fmt.Sprint(accountID)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListOwnerRoomAccounts returns lifecycle metadata for one owner-scoped room.
@@ -671,10 +1128,6 @@ func (r *PostgresRepository) DecideMembershipAndSettle(ctx context.Context, requ
 	if room.OwnerUserID != request.OwnerUserID {
 		return JoinResult{}, ErrRoomForbidden
 	}
-	if !room.RequiresApproval {
-		return JoinResult{}, ErrRoomUnavailable
-	}
-
 	var membership Membership
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, room_id, user_id, status, queued_at, joined_at, ended_at, end_reason
@@ -791,6 +1244,20 @@ func (r *PostgresRepository) joinRoomTx(ctx context.Context, tx *sql.Tx, request
 	if room.OwnerUserID == request.UserID {
 		return JoinResult{}, ErrRoomForbidden
 	}
+	var hasSchedulableAccount bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM redstone_account_share_room_accounts ra
+			JOIN accounts a ON a.id = ra.account_id
+			WHERE ra.room_id = $1 AND ra.state = 'active'
+			  AND a.owner_user_id = $2 AND a.deleted_at IS NULL AND a.status = 'active'
+		)`, room.ID, room.OwnerUserID).Scan(&hasSchedulableAccount); err != nil {
+		return JoinResult{}, err
+	}
+	if !hasSchedulableAccount {
+		return JoinResult{}, ErrRoomHasNoAvailableAccount
+	}
 	privateGroupID, err := r.activeRoomPrivateGroup(ctx, tx, room.ID)
 	if err != nil {
 		return JoinResult{}, err
@@ -863,15 +1330,17 @@ func (r *PostgresRepository) joinRoomTx(ctx context.Context, tx *sql.Tx, request
 		WHERE room_id = $1 AND status IN ('active', 'ending')`, request.RoomID).Scan(&activeSeats); err != nil {
 		return JoinResult{}, err
 	}
-	status := MembershipQueued
-	if !room.RequiresApproval && activeSeats < room.SeatLimit {
-		status = MembershipActive
+	status := MembershipActive
+	if activeSeats >= room.SeatLimit {
+		status = MembershipQueued
 	}
 	var membership Membership
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO redstone_account_share_memberships (room_id, user_id, status, joined_at)
-		VALUES ($1, $2, $3, CASE WHEN $3 = 'active' THEN NOW() ELSE NULL END)
-		RETURNING id, room_id, user_id, status, queued_at, joined_at, ended_at, end_reason`, request.RoomID, request.UserID, status).Scan(
+	var joinedAt any
+	if status == MembershipActive {
+		joinedAt = time.Now().UTC()
+	}
+	err = tx.QueryRowContext(ctx, membershipInsertSQL,
+		request.RoomID, request.UserID, status, joinedAt).Scan(
 		&membership.ID, &membership.RoomID, &membership.UserID, &membership.Status, &membership.QueuedAt, &membership.JoinedAt, &membership.EndedAt, &membership.EndReason)
 	if err != nil {
 		return JoinResult{}, err
@@ -886,6 +1355,11 @@ func (r *PostgresRepository) joinRoomTx(ctx context.Context, tx *sql.Tx, request
 	}
 	return result, nil
 }
+
+const membershipInsertSQL = `
+	INSERT INTO redstone_account_share_memberships (room_id, user_id, status, joined_at)
+	VALUES ($1, $2, $3, $4)
+	RETURNING id, room_id, user_id, status, queued_at, joined_at, ended_at, end_reason`
 
 func (r *PostgresRepository) HeartbeatLease(ctx context.Context, userID, leaseID int64) (Lease, error) {
 	var lease Lease
@@ -1626,7 +2100,9 @@ func lockJoinableRoom(ctx context.Context, tx *sql.Tx, roomID int64) (Room, erro
 	var room Room
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, owner_user_id, name, description, platform, visibility, status, requires_approval,
-		       seat_limit, lease_seconds, idle_timeout_seconds, lease_price, platform_fee_rate, created_at, updated_at
+		       seat_limit, lease_seconds, idle_timeout_seconds,
+		       COALESCE(room_rate_multiplier * hourly_fee, lease_price) AS lease_price,
+		       platform_fee_rate, created_at, updated_at
 		FROM redstone_account_share_rooms
 		WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, roomID).Scan(
 		&room.ID, &room.OwnerUserID, &room.Name, &room.Description, &room.Platform, &room.Visibility, &room.Status,
@@ -1641,6 +2117,11 @@ func lockJoinableRoom(ctx context.Context, tx *sql.Tx, roomID int64) (Room, erro
 	if room.Status != RoomActive {
 		return Room{}, ErrRoomUnavailable
 	}
+	// 历史数据可能仍保存 requires_approval=true，但审批已不是房间能力。
+	// 统一归一化返回值，避免客户端继续渲染已下线的审批入口。
+	room.RequiresApproval = false
+	room.RoomRateMultiplier = decimal.NewFromInt(1)
+	room.HourlyFee = room.LeasePrice
 	return room, nil
 }
 
@@ -1703,8 +2184,11 @@ func createLeaseAndIntent(ctx context.Context, tx *sql.Tx, room Room, membership
 	if err != nil {
 		return Lease{}, SettlementIntent{}, err
 	}
-	fee := room.LeasePrice.Mul(room.PlatformFeeRate).Round(wallet.MonetaryScale)
-	ownerAmount := room.LeasePrice.Sub(fee)
+	// Keep admission atomic while charging one hourly unit up front. The room
+	// rate is applied to the hourly fee; legacy lease_price is no longer used.
+	grossAmount := room.HourlyFee.Mul(normalizedMultiplier(room.RoomRateMultiplier)).Round(wallet.MonetaryScale)
+	fee := grossAmount.Mul(room.PlatformFeeRate).Round(wallet.MonetaryScale)
+	ownerAmount := grossAmount.Sub(fee)
 	var intent SettlementIntent
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO redstone_account_share_settlement_intents
@@ -1712,7 +2196,7 @@ func createLeaseAndIntent(ctx context.Context, tx *sql.Tx, room Room, membership
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, lease_id, membership_id, room_id, payer_user_id, owner_user_id, subscription_id, gross_amount,
 		          platform_fee_amount, owner_amount, payment_source, status, idempotency_key, failure_reason, settled_at`,
-		lease.ID, membership.ID, room.ID, membership.UserID, room.OwnerUserID, nil, room.LeasePrice, fee, ownerAmount, key).Scan(
+		lease.ID, membership.ID, room.ID, membership.UserID, room.OwnerUserID, nil, grossAmount, fee, ownerAmount, key).Scan(
 		&intent.ID, &intent.LeaseID, &intent.MembershipID, &intent.RoomID, &intent.PayerUserID, &intent.OwnerUserID, &intent.SubscriptionID,
 		&intent.GrossAmount, &intent.PlatformFee, &intent.OwnerAmount, &intent.PaymentSource, &intent.Status, &intent.IdempotencyKey,
 		&intent.FailureReason, &intent.SettledAt)
@@ -1722,14 +2206,22 @@ func createLeaseAndIntent(ctx context.Context, tx *sql.Tx, room Room, membership
 	return lease, intent, nil
 }
 
+func normalizedMultiplier(value decimal.Decimal) decimal.Decimal {
+	if !value.IsPositive() {
+		return decimal.NewFromInt(1)
+	}
+	return value
+}
+
 type rowScanner interface{ Scan(...any) error }
 
 func scanRoom(row rowScanner) (Room, error) {
 	var room Room
 	err := row.Scan(&room.ID, &room.OwnerUserID, &room.Name, &room.Description, &room.Platform, &room.Visibility, &room.Status,
 		&room.RequiresApproval, &room.SeatLimit, &room.LeaseSeconds, &room.IdleTimeoutSeconds,
-		&room.LeasePrice, &room.PlatformFeeRate, &room.CreatedAt, &room.UpdatedAt,
-		&room.AccountCount, &room.ActiveSeats, &room.AverageRating, &room.ReviewCount)
+		&room.LeasePrice, &room.RoomRateMultiplier, &room.HourlyFee, &room.HourlyFeeFreeThreshold, &room.PlatformFeeRate, &room.CreatedAt, &room.UpdatedAt,
+		&room.AccountCount, &room.ActiveSeats, &room.AverageRating, &room.ReviewCount, &room.LowestAccountLevel, &room.IsVerified, &room.IsAvailable, &room.HasSchedulableAccount)
+	room.RequiresApproval = false
 	return room, err
 }
 
@@ -1737,6 +2229,39 @@ func scanMembership(row rowScanner) (Membership, error) {
 	var item Membership
 	err := row.Scan(&item.ID, &item.RoomID, &item.UserID, &item.Status, &item.QueuedAt, &item.JoinedAt, &item.EndedAt, &item.EndReason)
 	return item, err
+}
+
+func scanMembershipWithLease(row rowScanner) (Membership, error) {
+	var item Membership
+	var leaseID, leaseRoomID, leaseMembershipID, leaseAccountID, leaseUserID sql.NullInt64
+	var leaseState, leaseReason sql.NullString
+	var grantedAt, heartbeatAt, expiresAt, releasedAt sql.NullTime
+	err := row.Scan(
+		&item.ID, &item.RoomID, &item.UserID, &item.Status, &item.QueuedAt, &item.JoinedAt, &item.EndedAt, &item.EndReason,
+		&leaseID, &leaseRoomID, &leaseMembershipID, &leaseAccountID, &leaseUserID, &leaseState,
+		&grantedAt, &heartbeatAt, &expiresAt, &releasedAt, &leaseReason,
+	)
+	if err != nil || !leaseID.Valid {
+		return item, err
+	}
+	lease := &Lease{
+		ID:           leaseID.Int64,
+		RoomID:       leaseRoomID.Int64,
+		MembershipID: leaseMembershipID.Int64,
+		AccountID:    leaseAccountID.Int64,
+		UserID:       leaseUserID.Int64,
+		State:        LeaseState(leaseState.String),
+		GrantedAt:    grantedAt.Time.UTC(),
+		HeartbeatAt:  heartbeatAt.Time.UTC(),
+		ExpiresAt:    expiresAt.Time.UTC(),
+		Reason:       leaseReason.String,
+	}
+	if releasedAt.Valid {
+		value := releasedAt.Time.UTC()
+		lease.ReleasedAt = &value
+	}
+	item.Lease = lease
+	return item, nil
 }
 
 func scanRoomAccount(row rowScanner) (RoomAccount, error) {

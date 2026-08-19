@@ -144,8 +144,9 @@ type Group struct {
 	AllowLive bool `json:"allow_live"`
 
 	// 账号过滤控制（仅 OpenAI/Antigravity 平台有效）
-	RequireOAuthOnly  bool `json:"require_oauth_only"`
-	RequirePrivacySet bool `json:"require_privacy_set"`
+	RequireOAuthOnly           bool     `json:"require_oauth_only"`
+	RequirePrivacySet          bool     `json:"require_privacy_set"`
+	AllowedOpenAIAccountLevels []string `json:"allowed_account_levels"`
 
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制），设置后覆盖用户级 rpm_limit。
 	RPMLimit int `json:"rpm_limit"`
@@ -194,11 +195,12 @@ type AdminGroup struct {
 }
 
 type Account struct {
-	ID       int64   `json:"id"`
-	Name     string  `json:"name"`
-	Notes    *string `json:"notes"`
-	Platform string  `json:"platform"`
-	Type     string  `json:"type"`
+	ID           int64   `json:"id"`
+	Name         string  `json:"name"`
+	Notes        *string `json:"notes"`
+	Platform     string  `json:"platform"`
+	AccountLevel string  `json:"account_level"`
+	Type         string  `json:"type"`
 	// Credentials 经 RedactCredentials 处理后只含非敏感子键；敏感 token / api_key / 私钥
 	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
 	Credentials             map[string]any                 `json:"credentials"`

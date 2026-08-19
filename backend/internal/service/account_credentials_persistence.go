@@ -24,6 +24,7 @@ func persistAccountCredentials(ctx context.Context, repo AccountRepository, acco
 	}
 
 	account.Credentials = shallowCopyMap(credentials)
+	account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
 	if updater, ok := any(repo).(accountCredentialsUpdater); ok {
 		return updater.UpdateCredentials(ctx, account.ID, account.Credentials)
 	}

@@ -14,12 +14,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dgraph-io/ristretto"
 	"github.com/silent-QAQ/redstoneapi/internal/config"
 	infraerrors "github.com/silent-QAQ/redstoneapi/internal/pkg/errors"
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/ip"
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/pagination"
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/timezone"
-	"github.com/dgraph-io/ristretto"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -30,6 +30,8 @@ var (
 	ErrAPIKeyTooShort               = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
 	ErrAPIKeyInvalidChars           = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
 	ErrAPIKeyRoomUnavailable        = infraerrors.Forbidden("API_KEY_SHARING_ROOM_UNAVAILABLE", "sharing room is unavailable or cannot be used by this user")
+	ErrAPIKeyRoomGroupReserved      = infraerrors.BadRequest("API_KEY_SHARING_ROOM_GROUP_RESERVED", "sharing room groups must be selected through room mode")
+	ErrAPIKeyRoomGroupLocked        = infraerrors.Conflict("API_KEY_SHARING_ROOM_GROUP_LOCKED", "unbind the sharing room before changing this API key group")
 	ErrAPIKeyRoomBindingUnavailable = infraerrors.ServiceUnavailable("API_KEY_SHARING_ROOM_BINDING_UNAVAILABLE", "sharing room binding storage is unavailable")
 	ErrAPIKeyRateLimited            = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
 	ErrAPIKeyAuthOverloaded         = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
@@ -496,6 +498,9 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 	// 验证分组权限（如果指定了分组）
 	if req.GroupID != nil {
+		if err := s.ensureOrdinaryAPIKeyGroup(ctx, *req.GroupID); err != nil {
+			return nil, err
+		}
 		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
 		if err != nil {
 			return nil, fmt.Errorf("get group: %w", err)
@@ -875,6 +880,15 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 
 	if req.GroupID != nil {
+		// A room-mode key owns group_id through the binding transaction. Allowing
+		// this generic update would desynchronize api_keys from its room binding
+		// and let callers bypass the exact-room routing invariant.
+		if apiKey.SharingRoomID != nil && *apiKey.SharingRoomID > 0 {
+			return nil, ErrAPIKeyRoomGroupLocked
+		}
+		if err := s.ensureOrdinaryAPIKeyGroup(ctx, *req.GroupID); err != nil {
+			return nil, err
+		}
 		// 验证分组权限
 		user, err := s.userRepo.GetByID(ctx, userID)
 		if err != nil {
@@ -1106,6 +1120,13 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 	if err != nil {
 		return nil, fmt.Errorf("list active groups: %w", err)
 	}
+	// Room backing groups are implementation details. They remain usable by
+	// scheduler and gateway authorization, but must never be presented as an
+	// ordinary API-key group alongside the room-mode picker.
+	roomGroupIDs, err := s.sharingRoomGroupIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// 获取用户的所有有效订阅
 	activeSubscriptions, err := s.userSubRepo.ListActiveByUserID(ctx, userID)
@@ -1122,12 +1143,56 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 	// 过滤出用户有权限的分组
 	availableGroups := make([]Group, 0)
 	for _, group := range allGroups {
+		if _, internal := roomGroupIDs[group.ID]; internal {
+			continue
+		}
 		if s.canUserBindGroupInternal(user, &group, subscribedGroupIDs) {
 			availableGroups = append(availableGroups, group)
 		}
 	}
 
 	return availableGroups, nil
+}
+
+// sharingRoomGroupIDRepository is optional to keep non-PostgreSQL test and
+// extension repositories compatible with the core group repository contract.
+type sharingRoomGroupIDRepository interface {
+	ListSharingRoomGroupIDs(context.Context) ([]int64, error)
+}
+
+func (s *APIKeyService) sharingRoomGroupIDs(ctx context.Context) (map[int64]struct{}, error) {
+	groups := make(map[int64]struct{})
+	repository, ok := s.groupRepo.(sharingRoomGroupIDRepository)
+	if !ok {
+		return groups, nil
+	}
+	ids, err := repository.ListSharingRoomGroupIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list sharing room groups: %w", err)
+	}
+	for _, id := range ids {
+		if id > 0 {
+			groups[id] = struct{}{}
+		}
+	}
+	return groups, nil
+}
+
+// ensureOrdinaryAPIKeyGroup rejects the private backing group of every room.
+// Room mode must be established through BindSharingRoom, which validates the
+// room state, membership and exact room ID atomically with group assignment.
+func (s *APIKeyService) ensureOrdinaryAPIKeyGroup(ctx context.Context, groupID int64) error {
+	if groupID <= 0 {
+		return ErrGroupNotAllowed
+	}
+	roomGroupIDs, err := s.sharingRoomGroupIDs(ctx)
+	if err != nil {
+		return err
+	}
+	if _, reserved := roomGroupIDs[groupID]; reserved {
+		return ErrAPIKeyRoomGroupReserved
+	}
+	return nil
 }
 
 // canUserBindGroupInternal 内部方法，检查用户是否可以绑定分组（使用预加载的订阅数据）

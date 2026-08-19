@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"github.com/redis/go-redis/v9"
 	"github.com/silent-QAQ/redstoneapi/ent"
 	"github.com/silent-QAQ/redstoneapi/internal/config"
 	"github.com/silent-QAQ/redstoneapi/internal/handler"
@@ -24,7 +25,6 @@ import (
 	"github.com/silent-QAQ/redstoneapi/internal/server"
 	"github.com/silent-QAQ/redstoneapi/internal/server/middleware"
 	"github.com/silent-QAQ/redstoneapi/internal/service"
-	"github.com/redis/go-redis/v9"
 	"log"
 	"net/http"
 	"sync"
@@ -360,7 +360,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		return nil, err
 	}
 	operationsHandler := operations.NewHandler(operationsService)
-	sharingPostgresRepository, err := sharing.NewPostgresRepository(db)
+	sharingPostgresRepository, err := sharing.NewPostgresRepositoryWithSettings(db, settingService)
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +374,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
-	controlledaccountHandler := controlledaccount.ProvideHandler(controlledaccountService, db, adminService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, grokOAuthService, rateLimitService, accountUsageService, accountTestService, concurrencyService, crsSyncService, sessionLimitCache, rpmCache, compositeTokenCacheInvalidator, grokQuotaService, scheduledTestService)
+	controlledaccountHandler := controlledaccount.ProvideHandler(controlledaccountService, db, adminService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, grokOAuthService, rateLimitService, accountUsageService, accountTestService, concurrencyService, crsSyncService, sessionLimitCache, rpmCache, compositeTokenCacheInvalidator, grokQuotaService, scheduledTestService, upstreamBillingProbeService, ollamaCloudUsageService)
 	engine := server.ProvideRouter(configConfig, handlers, jwtAuthMiddleware, optionalJWTAuthMiddleware, adminAuthMiddleware, apiKeyAuthMiddleware, auditLogMiddleware, stepUpAuthMiddleware, apiKeyService, subscriptionService, opsService, settingService, compositeRouteResolver, redisClient, manager, marketHandler, operationsHandler, sharingHandler, walletHandler, controlledaccountHandler)
 	httpServer := server.ProvideHTTPServer(configConfig, engine)
 	settlementWorker := market.ProvideSettlementWorker(marketService, configConfig)

@@ -281,6 +281,13 @@ func parseForwardedClientIPHeadersSetting(value string) ([]string, error) {
 
 // parseSettings 解析设置到结构体
 func (s *SettingService) parseSettings(settings map[string]string) *SystemSettings {
+	openAIAccountLevels := DefaultOpenAIAccountLevelConfigs()
+	if raw := strings.TrimSpace(settings[SettingKeyOpenAIAccountLevels]); raw != "" {
+		var configured []OpenAIAccountLevelConfig
+		if json.Unmarshal([]byte(raw), &configured) == nil {
+			openAIAccountLevels = NormalizeOpenAIAccountLevelConfigs(configured)
+		}
+	}
 	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
 	loginAgreementDocuments := parseLoginAgreementDocuments(settings[SettingKeyLoginAgreementDocuments])
 	loginAgreementUpdatedAt := strings.TrimSpace(settings[SettingKeyLoginAgreementUpdatedAt])
@@ -308,6 +315,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		}
 	}
 	result := &SystemSettings{
+		OpenAIAccountLevels:                  openAIAccountLevels,
 		RegistrationEnabled:                    settings[SettingKeyRegistrationEnabled] == "true",
 		EmailVerifyEnabled:                     emailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:       ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),

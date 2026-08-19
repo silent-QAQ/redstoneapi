@@ -105,6 +105,20 @@ func (_u *AccountUpdate) SetNillablePlatform(v *string) *AccountUpdate {
 	return _u
 }
 
+// SetAccountLevel sets the "account_level" field.
+func (_u *AccountUpdate) SetAccountLevel(v string) *AccountUpdate {
+	_u.mutation.SetAccountLevel(v)
+	return _u
+}
+
+// SetNillableAccountLevel sets the "account_level" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableAccountLevel(v *string) *AccountUpdate {
+	if v != nil {
+		_u.SetAccountLevel(*v)
+	}
+	return _u
+}
+
 // SetType sets the "type" field.
 func (_u *AccountUpdate) SetType(v string) *AccountUpdate {
 	_u.mutation.SetType(v)
@@ -794,6 +808,11 @@ func (_u *AccountUpdate) check() error {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Account.platform": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.AccountLevel(); ok {
+		if err := account.AccountLevelValidator(v); err != nil {
+			return &ValidationError{Name: "account_level", err: fmt.Errorf(`ent: validator failed for field "Account.account_level": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.GetType(); ok {
 		if err := account.TypeValidator(v); err != nil {
 			return &ValidationError{Name: "type", err: fmt.Errorf(`ent: validator failed for field "Account.type": %w`, err)}
@@ -849,6 +868,9 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Platform(); ok {
 		_spec.SetField(account.FieldPlatform, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.AccountLevel(); ok {
+		_spec.SetField(account.FieldAccountLevel, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.GetType(); ok {
 		_spec.SetField(account.FieldType, field.TypeString, value)
@@ -1277,6 +1299,20 @@ func (_u *AccountUpdateOne) SetPlatform(v string) *AccountUpdateOne {
 func (_u *AccountUpdateOne) SetNillablePlatform(v *string) *AccountUpdateOne {
 	if v != nil {
 		_u.SetPlatform(*v)
+	}
+	return _u
+}
+
+// SetAccountLevel sets the "account_level" field.
+func (_u *AccountUpdateOne) SetAccountLevel(v string) *AccountUpdateOne {
+	_u.mutation.SetAccountLevel(v)
+	return _u
+}
+
+// SetNillableAccountLevel sets the "account_level" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableAccountLevel(v *string) *AccountUpdateOne {
+	if v != nil {
+		_u.SetAccountLevel(*v)
 	}
 	return _u
 }
@@ -1983,6 +2019,11 @@ func (_u *AccountUpdateOne) check() error {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Account.platform": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.AccountLevel(); ok {
+		if err := account.AccountLevelValidator(v); err != nil {
+			return &ValidationError{Name: "account_level", err: fmt.Errorf(`ent: validator failed for field "Account.account_level": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.GetType(); ok {
 		if err := account.TypeValidator(v); err != nil {
 			return &ValidationError{Name: "type", err: fmt.Errorf(`ent: validator failed for field "Account.type": %w`, err)}
@@ -2055,6 +2096,9 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if value, ok := _u.mutation.Platform(); ok {
 		_spec.SetField(account.FieldPlatform, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.AccountLevel(); ok {
+		_spec.SetField(account.FieldAccountLevel, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.GetType(); ok {
 		_spec.SetField(account.FieldType, field.TypeString, value)

@@ -271,6 +271,7 @@ type CreateGroupInput struct {
 	DefaultMappedModel          string
 	RequireOAuthOnly            bool
 	RequirePrivacySet           bool
+	AllowedOpenAIAccountLevels  []string
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
 	ModelsListConfig            GroupModelsListConfig
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
@@ -344,6 +345,7 @@ type UpdateGroupInput struct {
 	DefaultMappedModel          *string
 	RequireOAuthOnly            *bool
 	RequirePrivacySet           *bool
+	AllowedOpenAIAccountLevels  *[]string
 	MessagesDispatchModelConfig *OpenAIMessagesDispatchModelConfig
 	ModelsListConfig            *GroupModelsListConfig
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
@@ -367,6 +369,7 @@ type CreateAccountInput struct {
 	Platform           string
 	Type               string
 	Credentials        map[string]any
+	AccountLevel       string
 	Extra              map[string]any
 	ProxyID            *int64
 	Concurrency        int
@@ -398,6 +401,7 @@ type UpdateAccountInput struct {
 	Notes                 *string
 	Type                  string // Account type: oauth, setup-token, apikey
 	Credentials           map[string]any
+	AccountLevel          *string
 	Extra                 map[string]any
 	ProxyID               *int64
 	Concurrency           *int     // 使用指针区分"未提供"和"设置为0"

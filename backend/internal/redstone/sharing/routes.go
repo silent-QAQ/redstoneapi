@@ -1,9 +1,9 @@
 package sharing
 
 import (
+	"github.com/gin-gonic/gin"
 	"github.com/silent-QAQ/redstoneapi/internal/server/middleware"
 	"github.com/silent-QAQ/redstoneapi/internal/service"
-	"github.com/gin-gonic/gin"
 )
 
 // RegisterRoutes only exposes room lifecycle APIs. It never exposes account
@@ -20,6 +20,7 @@ func RegisterRoutes(v1 *gin.RouterGroup, handler *Handler, jwtAuth middleware.JW
 	group.POST("/rooms", handler.CreateRoom)
 	group.PUT("/rooms/:id", handler.UpdateRoom)
 	group.DELETE("/rooms/:id", handler.CloseRoom)
+	group.DELETE("/rooms/:id/archive", handler.DeleteRoom)
 	group.GET("/rooms/:id/accounts", handler.ListOwnerRoomAccounts)
 	group.POST("/rooms/:id/accounts", handler.BindAccount)
 	group.POST("/rooms/:id/accounts/:account_id/drain", handler.DrainRoomAccount)
@@ -31,6 +32,7 @@ func RegisterRoutes(v1 *gin.RouterGroup, handler *Handler, jwtAuth middleware.JW
 	group.GET("/rooms/:id/reviews", handler.ListRoomReviews)
 	group.POST("/rooms/:id/reviews", handler.CreateReview)
 	group.GET("/memberships", handler.ListMemberships)
+	group.DELETE("/memberships/:id", handler.LeaveMembership)
 	group.POST("/memberships/:id/lease", handler.AcquireLease)
 	group.POST("/leases/:id/heartbeat", handler.HeartbeatLease)
 	group.DELETE("/leases/:id", handler.ReleaseLease)

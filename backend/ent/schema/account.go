@@ -64,6 +64,7 @@ func (Account) Fields() []ent.Field {
 		field.String("platform").
 			MaxLen(50).
 			NotEmpty(),
+		field.String("account_level").MaxLen(64).Default("unknown"),
 
 		// type: 认证类型，如 "api_key", "oauth", "cookie" 等
 		// 不同类型决定了 credentials 中存储的数据结构
@@ -239,6 +240,7 @@ func (Account) Edges() []ent.Edge {
 func (Account) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("platform"),            // 按平台筛选
+		index.Fields("platform", "account_level"),
 		index.Fields("type"),                // 按认证类型筛选
 		index.Fields("status"),              // 按状态筛选
 		index.Fields("proxy_id"),            // 按代理筛选

@@ -1667,6 +1667,15 @@ func persistOpenAI429PlanType(ctx context.Context, repo AccountRepository, accou
 
 	if _, err := repo.BulkUpdate(ctx, []int64{account.ID}, AccountBulkUpdate{
 		Credentials: map[string]any{"plan_type": planType},
+		AccountLevel: func() *string {
+			credentials := shallowCopyMap(account.Credentials)
+			credentials["plan_type"] = planType
+			level := InferOpenAIAccountLevel(credentials, account.Extra)
+			if level == AccountLevelUnknown {
+				return nil
+			}
+			return &level
+		}(),
 	}); err != nil {
 		slog.Warn("openai_429_plan_type_sync_failed", "account_id", account.ID, "plan_type", planType, "error", err)
 		return
@@ -1676,6 +1685,7 @@ func persistOpenAI429PlanType(ctx context.Context, repo AccountRepository, accou
 		account.Credentials = make(map[string]any, 1)
 	}
 	account.Credentials["plan_type"] = planType
+	account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
 	slog.Info("openai_429_plan_type_synced", "account_id", account.ID, "previous_plan_type", current, "plan_type", planType)
 }
 

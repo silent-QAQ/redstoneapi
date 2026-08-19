@@ -60,7 +60,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		market.ProvideSettlementWorker,
 		market.ProvideDeliveryScanWorker,
 		market.NewHandler,
-		sharing.NewPostgresRepository,
+		sharing.NewPostgresRepositoryWithSettings,
 		sharing.NewAccessGuard,
 		sharing.ProvideLeaseExpiryWorker,
 		wire.Bind(new(sharing.Repository), new(*sharing.PostgresRepository)),
@@ -471,7 +471,6 @@ func provideCleanup(
 		}
 	}
 }
-
 
 
 

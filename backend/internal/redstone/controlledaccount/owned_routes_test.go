@@ -1,14 +1,16 @@
 package controlledaccount
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/gin-gonic/gin"
 	"github.com/silent-QAQ/redstoneapi/internal/server/middleware"
 	"github.com/silent-QAQ/redstoneapi/internal/service"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,16 +42,130 @@ func TestOwnerScopeMiddlewareBindsOwnerToRequestContext(t *testing.T) {
 	require.EqualValues(t, 88, body.OwnerUserID)
 }
 
-func TestOwnedVerifyHandlerIsReservedButInactive(t *testing.T) {
+func TestProvideHandlerInjectsOwnedAccountSettingsServices(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	upstreamBillingProbe := service.NewUpstreamBillingProbeService(nil, nil, nil)
+	ollamaCloudUsage := service.NewOllamaCloudUsageService(nil, nil, nil, nil, false)
+	handler := ProvideHandler(
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		upstreamBillingProbe, ollamaCloudUsage,
+	)
+
 	router := gin.New()
-	handler := &Handler{}
+	router.GET("/upstream-billing-probe/settings", handler.GetOwnedUpstreamBillingProbeSettings)
+	router.GET("/ollama-cloud-usage/settings", handler.GetOwnedOllamaCloudUsageSettings)
+
+	for _, path := range []string{
+		"/upstream-billing-probe/settings",
+		"/ollama-cloud-usage/settings",
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equalf(t, http.StatusOK, recorder.Code, "unexpected status for %s: %s", path, recorder.Body.String())
+	}
+}
+
+type ownedVerifyAdminService struct {
+	service.AdminService
+	account      *service.Account
+	extraUpdates map[string]any
+}
+
+func (s *ownedVerifyAdminService) GetAccount(_ context.Context, id int64) (*service.Account, error) {
+	if s.account == nil || s.account.ID != id {
+		return nil, service.ErrAccountNotFound
+	}
+	return s.account, nil
+}
+
+func (s *ownedVerifyAdminService) UpdateAccountExtra(_ context.Context, _ int64, updates map[string]any) error {
+	s.extraUpdates = make(map[string]any, len(updates))
+	for key, value := range updates {
+		s.extraUpdates[key] = value
+	}
+	return nil
+}
+
+func TestOwnedVerifyHandlerRunsModelVerificationForOwnedAPIKeyAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/chat/completions", r.URL.Path)
+		require.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"chat.completion","model":"gpt-4o-mini","choices":[{"message":{"content":"pong"},"finish_reason":"stop"}],"usage":{"total_tokens":2}}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	base := &ownedVerifyAdminService{account: &service.Account{
+		ID: 17, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "secret", "base_url": upstream.URL},
+	}}
+	handler := &Handler{
+		verifier: &AccountVerifier{httpClient: upstream.Client()},
+		ownedAdminService: &ownedAdminService{
+			AdminService: base,
+			base:         base,
+			db:           db,
+		},
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 88})
+		c.Request = c.Request.WithContext(withOwnerScope(c.Request.Context(), 88))
+		c.Next()
+	})
 	router.POST("/:id/verify", handler.OwnedVerify)
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM accounts`).
+		WithArgs(int64(17), int64(88)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM accounts`).
+		WithArgs(int64(17), int64(88)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/17/verify", nil))
 
-	require.Equal(t, http.StatusNotImplemented, recorder.Code)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "passed", base.extraUpdates["model_verification_verdict"])
+	require.Equal(t, "passed", base.extraUpdates["model_verification_status"])
+	require.Equal(t, "openai", base.extraUpdates["model_verification_protocol"])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestOwnedVerifyHandlerRejectsNonAPIKeyAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	base := &ownedVerifyAdminService{account: &service.Account{ID: 17, Type: service.AccountTypeOAuth}}
+	handler := &Handler{
+		verifier: NewAccountVerifier(),
+		ownedAdminService: &ownedAdminService{
+			AdminService: base,
+			base:         base,
+			db:           db,
+		},
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(withOwnerScope(c.Request.Context(), 88))
+		c.Next()
+	})
+	router.POST("/:id/verify", handler.OwnedVerify)
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM accounts`).
+		WithArgs(int64(17), int64(88)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/17/verify", nil))
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Nil(t, base.extraUpdates)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestOwnedAccountRoutesExposeCompleteCredentialAndDataModes(t *testing.T) {

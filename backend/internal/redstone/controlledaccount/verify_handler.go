@@ -42,7 +42,7 @@ func (h *Handler) TriggerVerification(c *gin.Context) {
 		return
 	}
 
-	result, err := h.verifier.VerifyAccount(c.Request.Context(), accountID)
+	result, err := h.verifier.VerifyAccount(c.Request.Context(), h.service, userID.(int64), accountID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "verification failed: " + err.Error()})
 		return

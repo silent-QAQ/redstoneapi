@@ -160,6 +160,12 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 
 	updates := make(map[string]string)
+	levelConfigs, err := ValidateOpenAIAccountLevelConfigs(settings.OpenAIAccountLevels)
+	if err != nil { return nil, infraerrors.BadRequest("INVALID_OPENAI_ACCOUNT_LEVELS", err.Error()) }
+	settings.OpenAIAccountLevels = levelConfigs
+	levelJSON, err := json.Marshal(levelConfigs)
+	if err != nil { return nil, fmt.Errorf("marshal openai account levels: %w", err) }
+	updates[SettingKeyOpenAIAccountLevels] = string(levelJSON)
 
 	// 注册设置
 	updates[SettingKeyRegistrationEnabled] = strconv.FormatBool(settings.RegistrationEnabled)

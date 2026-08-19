@@ -117,6 +117,7 @@ type CreateAccountRequest struct {
 	Platform                string         `json:"platform" binding:"required"`
 	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
 	Credentials             map[string]any `json:"credentials" binding:"required"`
+	AccountLevel            string         `json:"account_level"`
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
 	Concurrency             int            `json:"concurrency"`
@@ -137,6 +138,7 @@ type UpdateAccountRequest struct {
 	Notes                   *string        `json:"notes"`
 	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
 	Credentials             map[string]any `json:"credentials"`
+	AccountLevel            *string        `json:"account_level"`
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
 	Concurrency             *int           `json:"concurrency"`
@@ -852,6 +854,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			Platform:              req.Platform,
 			Type:                  req.Type,
 			Credentials:           req.Credentials,
+			AccountLevel:          req.AccountLevel,
 			Extra:                 req.Extra,
 			ProxyID:               req.ProxyID,
 			Concurrency:           req.Concurrency,
@@ -979,6 +982,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		Notes:                 req.Notes,
 		Type:                  req.Type,
 		Credentials:           req.Credentials,
+		AccountLevel:          req.AccountLevel,
 		Extra:                 req.Extra,
 		ProxyID:               req.ProxyID,
 		Concurrency:           req.Concurrency, // 指针类型，nil 表示未提供

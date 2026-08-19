@@ -120,6 +120,17 @@ func TestAPIKeyUpdate_DeclaresStatusWhenReactivated(t *testing.T) {
 	require.Equal(t, []APIKeyUpdateFields{{Quota: true, Status: true}}, repo.updateFields)
 }
 
+func TestAPIKeyUpdateRejectsDirectGroupChangeForRoomModeKey(t *testing.T) {
+	groupID, roomID := int64(42), int64(23)
+	svc, repo := newUpdateFieldsAPIKeyService(&APIKey{
+		ID: 1, UserID: 7, Key: "sk-room", Status: StatusActive, GroupID: &groupID, SharingRoomID: &roomID,
+	})
+
+	_, err := svc.Update(context.Background(), 1, 7, UpdateAPIKeyRequest{GroupID: &groupID})
+	require.ErrorIs(t, err, ErrAPIKeyRoomGroupLocked)
+	require.Empty(t, repo.updateFields)
+}
+
 // 计费热路径把 Key 标记为配额耗尽时只写 status，
 // 否则会把刚原子递增的 quota_used 按快照覆盖掉。
 func TestUpdateQuotaUsed_ExhaustedMarkOnlyDeclaresStatus(t *testing.T) {

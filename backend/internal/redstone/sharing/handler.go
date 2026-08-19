@@ -1,14 +1,15 @@
 package sharing
 
 import (
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/silent-QAQ/redstoneapi/internal/pkg/response"
-	"github.com/silent-QAQ/redstoneapi/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"github.com/silent-QAQ/redstoneapi/internal/pkg/response"
+	"github.com/silent-QAQ/redstoneapi/internal/server/middleware"
 )
 
 type Handler struct{ service *Service }
@@ -20,7 +21,20 @@ func (h *Handler) ListPublicRooms(c *gin.Context) {
 		return
 	}
 	page, size := response.ParsePagination(c)
-	items, total, err := h.service.ListPublicRooms(c.Request.Context(), size, (page-1)*size)
+	filter := PublicRoomFilter{
+		Search: c.Query("search"), Platform: c.Query("platform"), AccountGrade: c.Query("account_grade"),
+		SortBy: c.Query("sort_by"), SortOrder: c.Query("sort_order"),
+	}
+	var err error
+	if filter.VerifiedOnly, err = strconv.ParseBool(c.DefaultQuery("verified_only", "false")); err != nil {
+		response.BadRequest(c, "Invalid verified_only filter")
+		return
+	}
+	if filter.AvailableOnly, err = strconv.ParseBool(c.DefaultQuery("available_only", "false")); err != nil {
+		response.BadRequest(c, "Invalid available_only filter")
+		return
+	}
+	items, total, err := h.service.ListPublicRoomsFiltered(c.Request.Context(), filter, size, (page-1)*size)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -56,6 +70,22 @@ func (h *Handler) ListMemberships(c *gin.Context) {
 	response.Paginated(c, items, int64(total), page, size)
 }
 
+func (h *Handler) LeaveMembership(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok || !h.available(c) {
+		return
+	}
+	membershipID, ok := positiveID(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.service.LeaveMembership(c.Request.Context(), userID, membershipID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	c.Status(204)
+}
+
 func (h *Handler) ListOwnerRoomMemberships(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok || !h.available(c) {
@@ -80,25 +110,35 @@ func (h *Handler) CreateRoom(c *gin.Context) {
 		return
 	}
 	var payload struct {
-		Name               string          `json:"name"`
-		Description        string          `json:"description"`
-		Platform           string          `json:"platform"`
-		Visibility         RoomVisibility  `json:"visibility"`
-		RequiresApproval   bool            `json:"requires_approval"`
-		SeatLimit          int             `json:"seat_limit"`
-		LeaseSeconds       int             `json:"lease_seconds"`
-		IdleTimeoutSeconds int             `json:"idle_timeout_seconds"`
-		LeasePrice         decimal.Decimal `json:"lease_price"`
+		Name                   string          `json:"name"`
+		Description            string          `json:"description"`
+		Platform               string          `json:"platform"`
+		Visibility             RoomVisibility  `json:"visibility"`
+		RequiresApproval       bool            `json:"requires_approval"`
+		SeatLimit              int             `json:"seat_limit"`
+		LeaseSeconds           int             `json:"lease_seconds"`
+		IdleTimeoutSeconds     int             `json:"idle_timeout_seconds"`
+		LeasePrice             decimal.Decimal `json:"lease_price"`
+		RoomRateMultiplier     decimal.Decimal `json:"room_rate_multiplier"`
+		HourlyFee              decimal.Decimal `json:"hourly_fee"`
+		HourlyFeeFreeThreshold decimal.Decimal `json:"hourly_fee_free_threshold"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		response.BadRequest(c, "Invalid room request")
 		return
 	}
+	if payload.LeaseSeconds == 0 {
+		payload.LeaseSeconds = 3600
+	}
+	if payload.IdleTimeoutSeconds == 0 {
+		payload.IdleTimeoutSeconds = 1800
+	}
 	room, err := h.service.CreateRoom(c.Request.Context(), CreateRoomRequest{
 		OwnerUserID: userID, Name: strings.TrimSpace(payload.Name), Description: strings.TrimSpace(payload.Description),
-		Platform: strings.TrimSpace(payload.Platform), Visibility: payload.Visibility, RequiresApproval: payload.RequiresApproval,
+		Platform: strings.TrimSpace(payload.Platform), Visibility: payload.Visibility, RequiresApproval: false,
 		SeatLimit: payload.SeatLimit, LeaseSeconds: payload.LeaseSeconds, IdleTimeoutSeconds: payload.IdleTimeoutSeconds,
-		LeasePrice: payload.LeasePrice,
+		LeasePrice: payload.LeasePrice, RoomRateMultiplier: payload.RoomRateMultiplier,
+		HourlyFee: payload.HourlyFee, HourlyFeeFreeThreshold: payload.HourlyFeeFreeThreshold,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -117,23 +157,33 @@ func (h *Handler) UpdateRoom(c *gin.Context) {
 		return
 	}
 	var payload struct {
-		Name               string          `json:"name"`
-		Description        string          `json:"description"`
-		Visibility         RoomVisibility  `json:"visibility"`
-		RequiresApproval   bool            `json:"requires_approval"`
-		SeatLimit          int             `json:"seat_limit"`
-		LeaseSeconds       int             `json:"lease_seconds"`
-		IdleTimeoutSeconds int             `json:"idle_timeout_seconds"`
-		LeasePrice         decimal.Decimal `json:"lease_price"`
+		Name                   string          `json:"name"`
+		Description            string          `json:"description"`
+		Visibility             RoomVisibility  `json:"visibility"`
+		RequiresApproval       bool            `json:"requires_approval"`
+		SeatLimit              int             `json:"seat_limit"`
+		LeaseSeconds           int             `json:"lease_seconds"`
+		IdleTimeoutSeconds     int             `json:"idle_timeout_seconds"`
+		LeasePrice             decimal.Decimal `json:"lease_price"`
+		RoomRateMultiplier     decimal.Decimal `json:"room_rate_multiplier"`
+		HourlyFee              decimal.Decimal `json:"hourly_fee"`
+		HourlyFeeFreeThreshold decimal.Decimal `json:"hourly_fee_free_threshold"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		response.BadRequest(c, "Invalid room update request")
 		return
 	}
+	if payload.LeaseSeconds == 0 {
+		payload.LeaseSeconds = 3600
+	}
+	if payload.IdleTimeoutSeconds == 0 {
+		payload.IdleTimeoutSeconds = 1800
+	}
 	room, err := h.service.UpdateRoom(c.Request.Context(), UpdateRoomRequest{
 		OwnerUserID: userID, RoomID: roomID, Name: strings.TrimSpace(payload.Name), Description: strings.TrimSpace(payload.Description),
-		Visibility: payload.Visibility, RequiresApproval: payload.RequiresApproval, SeatLimit: payload.SeatLimit,
+		Visibility: payload.Visibility, RequiresApproval: false, SeatLimit: payload.SeatLimit,
 		LeaseSeconds: payload.LeaseSeconds, IdleTimeoutSeconds: payload.IdleTimeoutSeconds, LeasePrice: payload.LeasePrice,
+		RoomRateMultiplier: payload.RoomRateMultiplier, HourlyFee: payload.HourlyFee, HourlyFeeFreeThreshold: payload.HourlyFeeFreeThreshold,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -152,6 +202,25 @@ func (h *Handler) CloseRoom(c *gin.Context) {
 		return
 	}
 	if err := h.service.CloseRoom(c.Request.Context(), userID, roomID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	c.Status(204)
+}
+
+// DeleteRoom soft-deletes an already closed room. DELETE /rooms/:id remains
+// the established close operation, while this explicit endpoint prevents an
+// accidental destructive state transition.
+func (h *Handler) DeleteRoom(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok || !h.available(c) {
+		return
+	}
+	roomID, ok := positiveID(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteRoom(c.Request.Context(), userID, roomID); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -283,6 +352,7 @@ func (h *Handler) JoinRoom(c *gin.Context) {
 	key := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
 	result, err := h.service.JoinRoom(c.Request.Context(), JoinRoomRequest{UserID: userID, RoomID: roomID, IdempotencyKey: key})
 	if err != nil {
+		slog.Error("account share room join failed", "room_id", roomID, "user_id", userID, "error", err)
 		response.ErrorFrom(c, err)
 		return
 	}

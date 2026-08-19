@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
 	dbent "github.com/silent-QAQ/redstoneapi/ent"
 	dbaccount "github.com/silent-QAQ/redstoneapi/ent/account"
 	dbaccountgroup "github.com/silent-QAQ/redstoneapi/ent/accountgroup"
@@ -28,7 +29,6 @@ import (
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/logger"
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/pagination"
 	"github.com/silent-QAQ/redstoneapi/internal/service"
-	"github.com/lib/pq"
 
 	entsql "entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqljson"
@@ -108,6 +108,7 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
 		SetPlatform(account.Platform).
+		SetAccountLevel(service.NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)).
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
 		SetExtra(normalizeJSONMap(account.Extra)).
@@ -528,6 +529,7 @@ func (r *accountRepository) updateLockedAccount(
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
 		SetPlatform(account.Platform).
+		SetAccountLevel(service.NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)).
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
 		SetExtra(extra).
@@ -2882,6 +2884,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.Schedulable)
 		idx++
 	}
+	if updates.AccountLevel != nil {
+		setClauses = append(setClauses, "account_level = $"+itoa(idx))
+		args = append(args, *updates.AccountLevel)
+		idx++
+	}
 	if updates.ProbeEnabled != nil {
 		if updates.Extra == nil {
 			updates.Extra = make(map[string]any)
@@ -3364,6 +3371,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		Name:                    m.Name,
 		Notes:                   m.Notes,
 		Platform:                m.Platform,
+		AccountLevel:            m.AccountLevel,
 		Type:                    m.Type,
 		Credentials:             copyJSONMap(m.Credentials),
 		Extra:                   copyJSONMap(m.Extra),

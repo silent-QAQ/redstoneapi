@@ -93,6 +93,20 @@ func (_c *AccountCreate) SetPlatform(v string) *AccountCreate {
 	return _c
 }
 
+// SetAccountLevel sets the "account_level" field.
+func (_c *AccountCreate) SetAccountLevel(v string) *AccountCreate {
+	_c.mutation.SetAccountLevel(v)
+	return _c
+}
+
+// SetNillableAccountLevel sets the "account_level" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableAccountLevel(v *string) *AccountCreate {
+	if v != nil {
+		_c.SetAccountLevel(*v)
+	}
+	return _c
+}
+
 // SetType sets the "type" field.
 func (_c *AccountCreate) SetType(v string) *AccountCreate {
 	_c.mutation.SetType(v)
@@ -553,6 +567,10 @@ func (_c *AccountCreate) defaults() error {
 		v := account.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.AccountLevel(); !ok {
+		v := account.DefaultAccountLevel
+		_c.mutation.SetAccountLevel(v)
+	}
 	if _, ok := _c.mutation.Credentials(); !ok {
 		if account.DefaultCredentials == nil {
 			return fmt.Errorf("ent: uninitialized account.DefaultCredentials (forgotten import ent/runtime?)")
@@ -620,6 +638,14 @@ func (_c *AccountCreate) check() error {
 	if v, ok := _c.mutation.Platform(); ok {
 		if err := account.PlatformValidator(v); err != nil {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Account.platform": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.AccountLevel(); !ok {
+		return &ValidationError{Name: "account_level", err: errors.New(`ent: missing required field "Account.account_level"`)}
+	}
+	if v, ok := _c.mutation.AccountLevel(); ok {
+		if err := account.AccountLevelValidator(v); err != nil {
+			return &ValidationError{Name: "account_level", err: fmt.Errorf(`ent: validator failed for field "Account.account_level": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.GetType(); !ok {
@@ -722,6 +748,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Platform(); ok {
 		_spec.SetField(account.FieldPlatform, field.TypeString, value)
 		_node.Platform = value
+	}
+	if value, ok := _c.mutation.AccountLevel(); ok {
+		_spec.SetField(account.FieldAccountLevel, field.TypeString, value)
+		_node.AccountLevel = value
 	}
 	if value, ok := _c.mutation.GetType(); ok {
 		_spec.SetField(account.FieldType, field.TypeString, value)
@@ -1026,6 +1056,18 @@ func (u *AccountUpsert) SetPlatform(v string) *AccountUpsert {
 // UpdatePlatform sets the "platform" field to the value that was provided on create.
 func (u *AccountUpsert) UpdatePlatform() *AccountUpsert {
 	u.SetExcluded(account.FieldPlatform)
+	return u
+}
+
+// SetAccountLevel sets the "account_level" field.
+func (u *AccountUpsert) SetAccountLevel(v string) *AccountUpsert {
+	u.Set(account.FieldAccountLevel, v)
+	return u
+}
+
+// UpdateAccountLevel sets the "account_level" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateAccountLevel() *AccountUpsert {
+	u.SetExcluded(account.FieldAccountLevel)
 	return u
 }
 
@@ -1599,6 +1641,20 @@ func (u *AccountUpsertOne) SetPlatform(v string) *AccountUpsertOne {
 func (u *AccountUpsertOne) UpdatePlatform() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdatePlatform()
+	})
+}
+
+// SetAccountLevel sets the "account_level" field.
+func (u *AccountUpsertOne) SetAccountLevel(v string) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetAccountLevel(v)
+	})
+}
+
+// UpdateAccountLevel sets the "account_level" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateAccountLevel() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateAccountLevel()
 	})
 }
 
@@ -2412,6 +2468,20 @@ func (u *AccountUpsertBulk) SetPlatform(v string) *AccountUpsertBulk {
 func (u *AccountUpsertBulk) UpdatePlatform() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdatePlatform()
+	})
+}
+
+// SetAccountLevel sets the "account_level" field.
+func (u *AccountUpsertBulk) SetAccountLevel(v string) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetAccountLevel(v)
+	})
+}
+
+// UpdateAccountLevel sets the "account_level" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateAccountLevel() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateAccountLevel()
 	})
 }
 

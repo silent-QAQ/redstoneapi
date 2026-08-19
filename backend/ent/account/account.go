@@ -28,6 +28,8 @@ const (
 	FieldNotes = "notes"
 	// FieldPlatform holds the string denoting the platform field in the database.
 	FieldPlatform = "platform"
+	// FieldAccountLevel holds the string denoting the account_level field in the database.
+	FieldAccountLevel = "account_level"
 	// FieldType holds the string denoting the type field in the database.
 	FieldType = "type"
 	// FieldOwnerUserID holds the string denoting the owner_user_id field in the database.
@@ -139,6 +141,7 @@ var Columns = []string{
 	FieldName,
 	FieldNotes,
 	FieldPlatform,
+	FieldAccountLevel,
 	FieldType,
 	FieldOwnerUserID,
 	FieldCredentials,
@@ -201,6 +204,10 @@ var (
 	NameValidator func(string) error
 	// PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
 	PlatformValidator func(string) error
+	// DefaultAccountLevel holds the default value on creation for the "account_level" field.
+	DefaultAccountLevel string
+	// AccountLevelValidator is a validator for the "account_level" field. It is called by the builders before save.
+	AccountLevelValidator func(string) error
 	// TypeValidator is a validator for the "type" field. It is called by the builders before save.
 	TypeValidator func(string) error
 	// DefaultCredentials holds the default value on creation for the "credentials" field.
@@ -287,6 +294,11 @@ func ByNotes(opts ...sql.OrderTermOption) OrderOption {
 // ByPlatform orders the results by the platform field.
 func ByPlatform(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPlatform, opts...).ToFunc()
+}
+
+// ByAccountLevel orders the results by the account_level field.
+func ByAccountLevel(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAccountLevel, opts...).ToFunc()
 }
 
 // ByType orders the results by the type field.

@@ -406,18 +406,19 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
 	account := &Account{
-		OwnerUserID: input.OwnerUserID,
-		Name:        input.Name,
-		Notes:       normalizeAccountNotes(input.Notes),
-		Platform:    input.Platform,
-		Type:        input.Type,
-		Credentials: input.Credentials,
-		Extra:       accountExtra,
-		ProxyID:     input.ProxyID,
-		Concurrency: normalizeAccountConcurrency(input.Platform, input.Type, input.Concurrency),
-		Priority:    input.Priority,
-		Status:      StatusActive,
-		Schedulable: true,
+		OwnerUserID:  input.OwnerUserID,
+		Name:         input.Name,
+		Notes:        normalizeAccountNotes(input.Notes),
+		Platform:     input.Platform,
+		Type:         input.Type,
+		Credentials:  input.Credentials,
+		AccountLevel: normalizeOpenAILevelKey(input.AccountLevel),
+		Extra:        accountExtra,
+		ProxyID:      input.ProxyID,
+		Concurrency:  normalizeAccountConcurrency(input.Platform, input.Type, input.Concurrency),
+		Priority:     input.Priority,
+		Status:       StatusActive,
+		Schedulable:  true,
 	}
 	if input.ProbeEnabled != nil && *input.ProbeEnabled {
 		if !isUpstreamBillingProbeAccount(account) {
@@ -504,6 +505,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	account.AccountLevel = s.normalizeOpenAIAccountLevel(ctx, account)
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}
@@ -598,6 +600,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if input.Notes != nil {
 		account.Notes = normalizeAccountNotes(input.Notes)
+	}
+	if input.AccountLevel != nil {
+		account.AccountLevel = normalizeOpenAILevelKey(*input.AccountLevel)
 	}
 	if account.IsCredentialShadow() && input.Credentials != nil {
 		account.Credentials = sanitizeSparkShadowCredentials(input.Credentials)
@@ -774,6 +779,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *input.AutoPauseOnExpired
 	}
+	account.AccountLevel = s.normalizeOpenAIAccountLevel(ctx, account)
 
 	// 先验证分组是否存在（在任何写操作之前）
 	if input.GroupIDs != nil {

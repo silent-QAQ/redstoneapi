@@ -85,6 +85,11 @@ func Platform(v string) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldPlatform, v))
 }
 
+// AccountLevel applies equality check predicate on the "account_level" field. It's identical to AccountLevelEQ.
+func AccountLevel(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldAccountLevel, v))
+}
+
 // Type applies equality check predicate on the "type" field. It's identical to TypeEQ.
 func Type(v string) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldType, v))
@@ -533,6 +538,71 @@ func PlatformEqualFold(v string) predicate.Account {
 // PlatformContainsFold applies the ContainsFold predicate on the "platform" field.
 func PlatformContainsFold(v string) predicate.Account {
 	return predicate.Account(sql.FieldContainsFold(FieldPlatform, v))
+}
+
+// AccountLevelEQ applies the EQ predicate on the "account_level" field.
+func AccountLevelEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldAccountLevel, v))
+}
+
+// AccountLevelNEQ applies the NEQ predicate on the "account_level" field.
+func AccountLevelNEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldAccountLevel, v))
+}
+
+// AccountLevelIn applies the In predicate on the "account_level" field.
+func AccountLevelIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldAccountLevel, vs...))
+}
+
+// AccountLevelNotIn applies the NotIn predicate on the "account_level" field.
+func AccountLevelNotIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldAccountLevel, vs...))
+}
+
+// AccountLevelGT applies the GT predicate on the "account_level" field.
+func AccountLevelGT(v string) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldAccountLevel, v))
+}
+
+// AccountLevelGTE applies the GTE predicate on the "account_level" field.
+func AccountLevelGTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldAccountLevel, v))
+}
+
+// AccountLevelLT applies the LT predicate on the "account_level" field.
+func AccountLevelLT(v string) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldAccountLevel, v))
+}
+
+// AccountLevelLTE applies the LTE predicate on the "account_level" field.
+func AccountLevelLTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldAccountLevel, v))
+}
+
+// AccountLevelContains applies the Contains predicate on the "account_level" field.
+func AccountLevelContains(v string) predicate.Account {
+	return predicate.Account(sql.FieldContains(FieldAccountLevel, v))
+}
+
+// AccountLevelHasPrefix applies the HasPrefix predicate on the "account_level" field.
+func AccountLevelHasPrefix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasPrefix(FieldAccountLevel, v))
+}
+
+// AccountLevelHasSuffix applies the HasSuffix predicate on the "account_level" field.
+func AccountLevelHasSuffix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasSuffix(FieldAccountLevel, v))
+}
+
+// AccountLevelEqualFold applies the EqualFold predicate on the "account_level" field.
+func AccountLevelEqualFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldEqualFold(FieldAccountLevel, v))
+}
+
+// AccountLevelContainsFold applies the ContainsFold predicate on the "account_level" field.
+func AccountLevelContainsFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldContainsFold(FieldAccountLevel, v))
 }
 
 // TypeEQ applies the EQ predicate on the "type" field.

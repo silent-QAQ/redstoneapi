@@ -25,6 +25,7 @@ type Account struct {
 	Name                    string
 	Notes                   *string
 	Platform                string
+	AccountLevel            string
 	Type                    string
 	Credentials             map[string]any
 	Extra                   map[string]any

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
 	infraerrors "github.com/silent-QAQ/redstoneapi/internal/pkg/errors"
 	"github.com/silent-QAQ/redstoneapi/internal/redstone/wallet"
-	"github.com/shopspring/decimal"
 )
 
 var (
@@ -27,6 +27,7 @@ var (
 	ErrLeaseNotFound             = errors.New("account share lease was not found")
 	ErrRoomForbidden             = errors.New("account share room access is forbidden")
 	ErrRoomUnavailable           = errors.New("account share room is unavailable")
+	ErrRoomHasNoAvailableAccount = errors.New("account share room has no available account")
 	ErrPrivateInviteRequired     = errors.New("account share private invitation is required")
 	ErrRoomReviewRequired        = errors.New("account share room review is required")
 	ErrQuotaExceeded             = errors.New("account share quota exceeded")
@@ -36,6 +37,7 @@ var (
 	ErrRoomAccountState          = errors.New("account share room account state transition is invalid")
 	ErrRoomAccountHasActiveLease = errors.New("account share room account still has an active lease")
 	ErrRoomHasActiveLeases       = errors.New("account share room still has active leases")
+	ErrRoomMustBeClosed          = errors.New("account share room must be closed before deletion")
 	ErrReviewNotEligible         = errors.New("account share review requires a completed membership")
 	ErrSettlementNotFound        = errors.New("account share settlement intent was not found")
 	ErrSettlementState           = errors.New("account share settlement intent is not chargeable")
@@ -119,25 +121,81 @@ const (
 )
 
 type Room struct {
-	ID                 int64           `json:"id"`
-	OwnerUserID        int64           `json:"owner_user_id"`
-	Name               string          `json:"name"`
-	Description        string          `json:"description"`
-	Platform           string          `json:"platform"`
-	Visibility         RoomVisibility  `json:"visibility"`
-	Status             RoomStatus      `json:"status"`
-	RequiresApproval   bool            `json:"requires_approval"`
-	SeatLimit          int             `json:"seat_limit"`
-	LeaseSeconds       int             `json:"lease_seconds"`
-	IdleTimeoutSeconds int             `json:"idle_timeout_seconds"`
-	LeasePrice         decimal.Decimal `json:"lease_price"`
-	PlatformFeeRate    decimal.Decimal `json:"platform_fee_rate"`
-	AccountCount       int             `json:"account_count"`
-	ActiveSeats        int             `json:"active_seats"`
-	AverageRating      decimal.Decimal `json:"average_rating"`
-	ReviewCount        int             `json:"review_count"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
+	ID                     int64           `json:"id"`
+	OwnerUserID            int64           `json:"owner_user_id"`
+	Name                   string          `json:"name"`
+	Description            string          `json:"description"`
+	Platform               string          `json:"platform"`
+	Visibility             RoomVisibility  `json:"visibility"`
+	Status                 RoomStatus      `json:"status"`
+	RequiresApproval       bool            `json:"requires_approval"`
+	SeatLimit              int             `json:"seat_limit"`
+	LeaseSeconds           int             `json:"lease_seconds"`
+	IdleTimeoutSeconds     int             `json:"idle_timeout_seconds"`
+	LeasePrice             decimal.Decimal `json:"lease_price"`
+	RoomRateMultiplier     decimal.Decimal `json:"room_rate_multiplier"`
+	HourlyFee              decimal.Decimal `json:"hourly_fee"`
+	HourlyFeeFreeThreshold decimal.Decimal `json:"hourly_fee_free_threshold"`
+	PlatformFeeRate        decimal.Decimal `json:"platform_fee_rate"`
+	AccountCount           int             `json:"account_count"`
+	ActiveSeats            int             `json:"active_seats"`
+	AverageRating          decimal.Decimal `json:"average_rating"`
+	ReviewCount            int             `json:"review_count"`
+	LowestAccountLevel     string          `json:"lowest_account_level"`
+	// IsVerified is true only when the room has bound accounts and every
+	// still-bound API-key account has passed model verification. Other account
+	// types are verified when they are added.
+	IsVerified bool `json:"is_verified"`
+	// IsAvailable means an active account can currently be scheduled and the
+	// room still has a seat.
+	IsAvailable bool `json:"is_available"`
+	// HasSchedulableAccount distinguishes a full room from a room whose owner
+	// has not bound a usable account yet.
+	HasSchedulableAccount bool      `json:"has_schedulable_account"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+// PublicRoomFilter describes the account-square filters. AccountGrade is
+// matched against the lowest level among the room's currently bound accounts.
+type PublicRoomFilter struct {
+	Search        string
+	Platform      string
+	AccountGrade  string
+	VerifiedOnly  bool
+	AvailableOnly bool
+	SortBy        string
+	SortOrder     string
+}
+
+func (f *PublicRoomFilter) NormalizeAndValidate() error {
+	f.Search = strings.TrimSpace(f.Search)
+	f.Platform = strings.ToLower(strings.TrimSpace(f.Platform))
+	if f.Platform == "claude" {
+		f.Platform = "anthropic"
+	}
+	f.AccountGrade = strings.ToLower(strings.TrimSpace(f.AccountGrade))
+	f.SortBy = strings.ToLower(strings.TrimSpace(f.SortBy))
+	f.SortOrder = strings.ToLower(strings.TrimSpace(f.SortOrder))
+	if len(f.Search) > 120 || len(f.AccountGrade) > 50 {
+		return ErrInvalidRoom
+	}
+	if f.Platform != "" && f.Platform != "openai" && f.Platform != "anthropic" && f.Platform != "grok" && f.Platform != "gemini" && f.Platform != "antigravity" {
+		return ErrInvalidRoom
+	}
+	if f.SortBy == "" {
+		f.SortBy = "updated_at"
+	}
+	if f.SortBy != "updated_at" && f.SortBy != "rate_multiplier" && f.SortBy != "hourly_fee" && f.SortBy != "hourly_fee_free_threshold" {
+		return ErrInvalidRoom
+	}
+	if f.SortOrder == "" {
+		f.SortOrder = "desc"
+	}
+	if f.SortOrder != "asc" && f.SortOrder != "desc" {
+		return ErrInvalidRoom
+	}
+	return nil
 }
 
 type Membership struct {
@@ -149,6 +207,10 @@ type Membership struct {
 	JoinedAt  *time.Time       `json:"joined_at,omitempty"`
 	EndedAt   *time.Time       `json:"ended_at,omitempty"`
 	EndReason string           `json:"end_reason"`
+	// Lease is included for the current user only when the membership still
+	// has a live lease. The account square uses it to resume its heartbeat
+	// after a browser refresh.
+	Lease *Lease `json:"lease,omitempty"`
 }
 
 type Lease struct {
@@ -202,34 +264,40 @@ type PayoutReceipt struct {
 }
 
 type CreateRoomRequest struct {
-	OwnerUserID        int64
-	Name               string
-	Description        string
-	Platform           string
-	Visibility         RoomVisibility
-	RequiresApproval   bool
-	SeatLimit          int
-	LeaseSeconds       int
-	IdleTimeoutSeconds int
-	LeasePrice         decimal.Decimal
+	OwnerUserID            int64
+	Name                   string
+	Description            string
+	Platform               string
+	Visibility             RoomVisibility
+	RequiresApproval       bool
+	SeatLimit              int
+	LeaseSeconds           int
+	IdleTimeoutSeconds     int
+	LeasePrice             decimal.Decimal
+	RoomRateMultiplier     decimal.Decimal
+	HourlyFee              decimal.Decimal
+	HourlyFeeFreeThreshold decimal.Decimal
 }
 
 type UpdateRoomRequest struct {
-	OwnerUserID        int64
-	RoomID             int64
-	Name               string
-	Description        string
-	Visibility         RoomVisibility
-	RequiresApproval   bool
-	SeatLimit          int
-	LeaseSeconds       int
-	IdleTimeoutSeconds int
-	LeasePrice         decimal.Decimal
+	OwnerUserID            int64
+	RoomID                 int64
+	Name                   string
+	Description            string
+	Visibility             RoomVisibility
+	RequiresApproval       bool
+	SeatLimit              int
+	LeaseSeconds           int
+	IdleTimeoutSeconds     int
+	LeasePrice             decimal.Decimal
+	RoomRateMultiplier     decimal.Decimal
+	HourlyFee              decimal.Decimal
+	HourlyFeeFreeThreshold decimal.Decimal
 }
 
-// roomStatusAfterVisibilityChange keeps public visibility behind moderation.
-// A suspended room stays suspended until an administrator acts, while an
-// unreviewed public room becomes immediately usable again when made private.
+// roomStatusAfterVisibilityChange keeps historical public visibility
+// moderation behavior for updates. New room creation bypasses this helper
+// and is immediately active.
 func roomStatusAfterVisibilityChange(currentStatus RoomStatus, currentVisibility, requestedVisibility RoomVisibility) RoomStatus {
 	if currentVisibility == requestedVisibility || currentStatus == RoomSuspended {
 		return currentStatus
@@ -247,7 +315,10 @@ func (r UpdateRoomRequest) Validate() error {
 	if r.OwnerUserID <= 0 || r.RoomID <= 0 || !validText(r.Name, 120) || len(r.Description) > 2000 ||
 		(r.Visibility != VisibilityPrivate && r.Visibility != VisibilityPublic) || r.SeatLimit < 1 || r.SeatLimit > 30 ||
 		r.LeaseSeconds < 60 || r.LeaseSeconds > 86400 || r.IdleTimeoutSeconds < 60 || r.IdleTimeoutSeconds > 86400 ||
-		r.LeasePrice.IsNegative() || !r.LeasePrice.Equal(r.LeasePrice.Round(wallet.MonetaryScale)) {
+		r.LeasePrice.IsNegative() || !r.LeasePrice.Equal(r.LeasePrice.Round(wallet.MonetaryScale)) ||
+		(r.RoomRateMultiplier.IsNegative() || (r.RoomRateMultiplier.IsPositive() && !r.RoomRateMultiplier.Equal(r.RoomRateMultiplier.Round(wallet.MonetaryScale))) ||
+			r.HourlyFee.IsNegative() || !r.HourlyFee.Equal(r.HourlyFee.Round(wallet.MonetaryScale)) ||
+			r.HourlyFeeFreeThreshold.IsNegative() || !r.HourlyFeeFreeThreshold.Equal(r.HourlyFeeFreeThreshold.Round(wallet.MonetaryScale))) {
 		return ErrInvalidRoom
 	}
 	return nil
@@ -257,7 +328,10 @@ func (r CreateRoomRequest) Validate() error {
 	if r.OwnerUserID <= 0 || !validText(r.Name, 120) || !validText(r.Platform, 50) || len(r.Description) > 2000 ||
 		(r.Visibility != VisibilityPrivate && r.Visibility != VisibilityPublic) || r.SeatLimit < 1 || r.SeatLimit > 30 ||
 		r.LeaseSeconds < 60 || r.LeaseSeconds > 86400 || r.IdleTimeoutSeconds < 60 || r.IdleTimeoutSeconds > 86400 ||
-		r.LeasePrice.IsNegative() || !r.LeasePrice.Equal(r.LeasePrice.Round(wallet.MonetaryScale)) {
+		r.LeasePrice.IsNegative() || !r.LeasePrice.Equal(r.LeasePrice.Round(wallet.MonetaryScale)) ||
+		(r.RoomRateMultiplier.IsNegative() || (r.RoomRateMultiplier.IsPositive() && !r.RoomRateMultiplier.Equal(r.RoomRateMultiplier.Round(wallet.MonetaryScale))) ||
+			r.HourlyFee.IsNegative() || !r.HourlyFee.Equal(r.HourlyFee.Round(wallet.MonetaryScale)) ||
+			r.HourlyFeeFreeThreshold.IsNegative() || !r.HourlyFeeFreeThreshold.Equal(r.HourlyFeeFreeThreshold.Round(wallet.MonetaryScale))) {
 		return ErrInvalidRoom
 	}
 	return nil
@@ -266,7 +340,7 @@ func (r CreateRoomRequest) Validate() error {
 type BindAccountRequest struct{ OwnerUserID, RoomID, AccountID, PrivateGroupID int64 }
 
 func (r BindAccountRequest) Validate() error {
-	if r.OwnerUserID <= 0 || r.RoomID <= 0 || r.AccountID <= 0 || r.PrivateGroupID <= 0 {
+	if r.OwnerUserID <= 0 || r.RoomID <= 0 || r.AccountID <= 0 || r.PrivateGroupID < 0 {
 		return ErrInvalidAccount
 	}
 	return nil
@@ -408,6 +482,12 @@ type Repository interface {
 	ListPayoutReceipts(context.Context, int64, int, int) ([]PayoutReceipt, int, error)
 }
 
+// PublicRoomFilterRepository is optional to preserve compatibility with
+// integrations that only implement the original room-listing interface.
+type PublicRoomFilterRepository interface {
+	ListPublicRoomsFiltered(context.Context, PublicRoomFilter, int, int) ([]Room, int, error)
+}
+
 // AtomicSettlementRepository keeps the payer debit, owner payout, immutable
 // receipt and settlement transition within one SQL transaction.
 type AtomicSettlementRepository interface {
@@ -430,6 +510,12 @@ type OwnerMembershipRepository interface {
 	DecideMembershipAndSettle(context.Context, MembershipDecisionRequest, *wallet.Service) (JoinResult, error)
 }
 
+// MembershipLifecycleRepository owns a member's explicit exit. It must release
+// any active lease, revoke temporary group access, and free a seat atomically.
+type MembershipLifecycleRepository interface {
+	LeaveMembership(context.Context, int64, int64) error
+}
+
 // OwnerRoomAccountRepository is intentionally separate so integrations that
 // only implement admission can opt into account lifecycle management without
 // weakening the owner-scoped transaction boundary.
@@ -442,6 +528,7 @@ type OwnerRoomAccountRepository interface {
 type OwnerRoomLifecycleRepository interface {
 	UpdateRoom(context.Context, UpdateRoomRequest) (Room, error)
 	CloseRoom(context.Context, int64, int64) error
+	DeleteRoom(context.Context, int64, int64) error
 }
 
 type Service struct {
@@ -466,6 +553,18 @@ func (s *Service) ListPublicRooms(ctx context.Context, limit, offset int) ([]Roo
 	rooms, total, err := s.repository.ListPublicRooms(ctx, limit, offset)
 	return rooms, total, applicationError(err)
 }
+
+func (s *Service) ListPublicRoomsFiltered(ctx context.Context, filter PublicRoomFilter, limit, offset int) ([]Room, int, error) {
+	if !validPage(limit, offset) {
+		return nil, 0, applicationError(ErrInvalidPagination)
+	}
+	repository, ok := s.repository.(PublicRoomFilterRepository)
+	if !ok {
+		return nil, 0, applicationError(ErrRepositoryRequired)
+	}
+	rooms, total, err := repository.ListPublicRoomsFiltered(ctx, filter, limit, offset)
+	return rooms, total, applicationError(err)
+}
 func (s *Service) ListOwnerRooms(ctx context.Context, ownerUserID int64, limit, offset int) ([]Room, int, error) {
 	if ownerUserID <= 0 || !validPage(limit, offset) {
 		return nil, 0, applicationError(ErrInvalidPagination)
@@ -479,6 +578,17 @@ func (s *Service) ListUserMemberships(ctx context.Context, userID int64, limit, 
 	}
 	items, total, err := s.repository.ListUserMemberships(ctx, userID, limit, offset)
 	return items, total, applicationError(err)
+}
+
+func (s *Service) LeaveMembership(ctx context.Context, userID, membershipID int64) error {
+	if userID <= 0 || membershipID <= 0 {
+		return applicationError(ErrInvalidMembership)
+	}
+	repository, ok := s.repository.(MembershipLifecycleRepository)
+	if !ok {
+		return applicationError(ErrRepositoryRequired)
+	}
+	return applicationError(repository.LeaveMembership(ctx, userID, membershipID))
 }
 func (s *Service) CreateRoom(ctx context.Context, request CreateRoomRequest) (Room, error) {
 	if err := request.Validate(); err != nil {
@@ -550,6 +660,19 @@ func (s *Service) CloseRoom(ctx context.Context, ownerUserID, roomID int64) erro
 		return applicationError(ErrRepositoryRequired)
 	}
 	return applicationError(repository.CloseRoom(ctx, ownerUserID, roomID))
+}
+
+// DeleteRoom archives a room only after it has been explicitly closed. The
+// history remains intact for audit and settlement reconciliation.
+func (s *Service) DeleteRoom(ctx context.Context, ownerUserID, roomID int64) error {
+	if ownerUserID <= 0 || roomID <= 0 {
+		return applicationError(ErrInvalidRoom)
+	}
+	repository, ok := s.repository.(OwnerRoomLifecycleRepository)
+	if !ok {
+		return applicationError(ErrRepositoryRequired)
+	}
+	return applicationError(repository.DeleteRoom(ctx, ownerUserID, roomID))
 }
 
 func (s *Service) CreateInvite(ctx context.Context, request InviteRequest) error {
@@ -696,7 +819,9 @@ func applicationError(err error) error {
 		return infraerrors.NotFound("ACCOUNT_SHARE_NOT_FOUND", "Account sharing resource was not found").WithCause(err)
 	case errors.Is(err, ErrRoomForbidden), errors.Is(err, ErrPrivateInviteRequired), errors.Is(err, ErrPrivateGroupForbidden):
 		return infraerrors.Forbidden("ACCOUNT_SHARE_FORBIDDEN", "You are not allowed to access this sharing room").WithCause(err)
-	case errors.Is(err, ErrRoomUnavailable), errors.Is(err, ErrRoomReviewRequired), errors.Is(err, ErrQuotaExceeded), errors.Is(err, ErrAccountAlreadyBound), errors.Is(err, ErrRoomAccountState), errors.Is(err, ErrRoomAccountHasActiveLease), errors.Is(err, ErrRoomHasActiveLeases), errors.Is(err, ErrReviewNotEligible), errors.Is(err, ErrSettlementState), errors.Is(err, ErrPrivateGroupConflict), errors.Is(err, ErrPrivateGroupOwnerRequired), errors.Is(err, ErrPrivateGroupRequired):
+	case errors.Is(err, ErrRoomHasNoAvailableAccount):
+		return infraerrors.Conflict("ACCOUNT_SHARE_NO_AVAILABLE_ACCOUNT", "This room has no available account").WithCause(err)
+	case errors.Is(err, ErrRoomUnavailable), errors.Is(err, ErrRoomReviewRequired), errors.Is(err, ErrQuotaExceeded), errors.Is(err, ErrAccountAlreadyBound), errors.Is(err, ErrRoomAccountState), errors.Is(err, ErrRoomAccountHasActiveLease), errors.Is(err, ErrRoomHasActiveLeases), errors.Is(err, ErrRoomMustBeClosed), errors.Is(err, ErrReviewNotEligible), errors.Is(err, ErrSettlementState), errors.Is(err, ErrPrivateGroupConflict), errors.Is(err, ErrPrivateGroupOwnerRequired), errors.Is(err, ErrPrivateGroupRequired):
 		return infraerrors.Conflict("ACCOUNT_SHARE_CONFLICT", "Account sharing request conflicts with current state").WithCause(err)
 	case errors.Is(err, ErrAccountNotOwned):
 		return infraerrors.Forbidden("ACCOUNT_SHARE_ACCOUNT_OWNERSHIP", "Only an account owner can share this account").WithCause(err)

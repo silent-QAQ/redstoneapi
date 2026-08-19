@@ -984,6 +984,18 @@ func (_u *GroupUpdate) SetNillableRequirePrivacySet(v *bool) *GroupUpdate {
 	return _u
 }
 
+// SetAllowedAccountLevels sets the "allowed_account_levels" field.
+func (_u *GroupUpdate) SetAllowedAccountLevels(v []string) *GroupUpdate {
+	_u.mutation.SetAllowedAccountLevels(v)
+	return _u
+}
+
+// AppendAllowedAccountLevels appends value to the "allowed_account_levels" field.
+func (_u *GroupUpdate) AppendAllowedAccountLevels(v []string) *GroupUpdate {
+	_u.mutation.AppendAllowedAccountLevels(v)
+	return _u
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_u *GroupUpdate) SetDefaultMappedModel(v string) *GroupUpdate {
 	_u.mutation.SetDefaultMappedModel(v)
@@ -1755,6 +1767,14 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.RequirePrivacySet(); ok {
 		_spec.SetField(group.FieldRequirePrivacySet, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowedAccountLevels(); ok {
+		_spec.SetField(group.FieldAllowedAccountLevels, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedAllowedAccountLevels(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, group.FieldAllowedAccountLevels, value)
+		})
 	}
 	if value, ok := _u.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)
@@ -3059,6 +3079,18 @@ func (_u *GroupUpdateOne) SetNillableRequirePrivacySet(v *bool) *GroupUpdateOne 
 	return _u
 }
 
+// SetAllowedAccountLevels sets the "allowed_account_levels" field.
+func (_u *GroupUpdateOne) SetAllowedAccountLevels(v []string) *GroupUpdateOne {
+	_u.mutation.SetAllowedAccountLevels(v)
+	return _u
+}
+
+// AppendAllowedAccountLevels appends value to the "allowed_account_levels" field.
+func (_u *GroupUpdateOne) AppendAllowedAccountLevels(v []string) *GroupUpdateOne {
+	_u.mutation.AppendAllowedAccountLevels(v)
+	return _u
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_u *GroupUpdateOne) SetDefaultMappedModel(v string) *GroupUpdateOne {
 	_u.mutation.SetDefaultMappedModel(v)
@@ -3860,6 +3892,14 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.RequirePrivacySet(); ok {
 		_spec.SetField(group.FieldRequirePrivacySet, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowedAccountLevels(); ok {
+		_spec.SetField(group.FieldAllowedAccountLevels, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedAllowedAccountLevels(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, group.FieldAllowedAccountLevels, value)
+		})
 	}
 	if value, ok := _u.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)

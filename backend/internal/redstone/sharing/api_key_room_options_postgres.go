@@ -32,7 +32,7 @@ func (r *PostgresRepository) ListAPIKeyRoomOptions(ctx context.Context, userID i
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT room.id, room_group.group_id, room.name, room.platform, room.visibility,
-			1.0 AS rate_multiplier,
+			COALESCE(room.room_rate_multiplier, 1.0) AS rate_multiplier,
 			(room.owner_user_id = $1 AND room.visibility = 'private') AS free_for_owner,
 			EXISTS (
 				SELECT 1 FROM redstone_account_share_memberships membership

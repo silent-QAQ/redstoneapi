@@ -8,12 +8,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lib/pq"
 	dbent "github.com/silent-QAQ/redstoneapi/ent"
 	"github.com/silent-QAQ/redstoneapi/ent/group"
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/logger"
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/pagination"
 	"github.com/silent-QAQ/redstoneapi/internal/service"
-	"github.com/lib/pq"
 
 	entsql "entgo.io/ent/dialect/sql"
 )
@@ -98,6 +98,7 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 		SetAllowLive(groupIn.AllowLive).
 		SetRequireOauthOnly(groupIn.RequireOAuthOnly).
 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
+		SetAllowedAccountLevels(groupIn.AllowedOpenAIAccountLevels).
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
@@ -268,6 +269,7 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetAllowLive(groupIn.AllowLive).
 		SetRequireOauthOnly(groupIn.RequireOAuthOnly).
 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
+		SetAllowedAccountLevels(groupIn.AllowedOpenAIAccountLevels).
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
@@ -633,6 +635,44 @@ func (r *groupRepository) ListActive(ctx context.Context) ([]service.Group, erro
 	}
 
 	return outGroups, nil
+}
+
+// ListSharingRoomGroupIDs returns every group ever reserved as a room backing
+// group. The mapping is a durable implementation detail: even after a room is
+// archived, its former internal group must not become a selectable ordinary
+// API-key group.
+func (r *groupRepository) ListSharingRoomGroupIDs(ctx context.Context) ([]int64, error) {
+	if r.sql == nil {
+		return []int64{}, nil
+	}
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT DISTINCT room_group.group_id
+		FROM redstone_account_share_room_private_groups room_group`)
+	if err != nil {
+		if isMissingSharingRoomTables(err) {
+			return []int64{}, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func isMissingSharingRoomTables(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "redstone_account_share_room_private_groups") &&
+		(strings.Contains(message, "does not exist") || strings.Contains(message, "no such table"))
 }
 
 func (r *groupRepository) ListActiveIDs(ctx context.Context) ([]int64, error) {

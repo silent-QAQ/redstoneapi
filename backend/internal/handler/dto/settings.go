@@ -25,8 +25,17 @@ type CustomEndpoint struct {
 	Description string `json:"description"`
 }
 
+type OpenAIAccountLevelConfig struct {
+	Key string `json:"key"`
+	Label string `json:"label"`
+	Aliases []string `json:"aliases"`
+	SortOrder int `json:"sort_order"`
+	Enabled bool `json:"enabled"`
+}
+
 // SystemSettings represents the admin settings API response payload.
 type SystemSettings struct {
+	OpenAIAccountLevels []OpenAIAccountLevelConfig `json:"openai_account_levels"`
 	RegistrationEnabled                 bool                     `json:"registration_enabled"`
 	EmailVerifyEnabled                  bool                     `json:"email_verify_enabled"`
 	RegistrationEmailSuffixWhitelist    []string                 `json:"registration_email_suffix_whitelist"`

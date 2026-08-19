@@ -90,7 +90,11 @@ func TestListOwnedProjectsMetadataWithoutSecrets(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"id", "owner_user_id", "name", "provider", "type", "lifecycle", "visibility", "health_state", "created_at", "updated_at",
-	}).AddRow(91, 7, "Private OpenAI", "openai", "api_key", "active", "private", "healthy", time.Now(), time.Now())
+		"last_verified_at", "verify_score", "verify_verdict",
+	}).AddRow(
+		91, 7, "Private OpenAI", "openai", "api_key", "active", "private", "healthy", time.Now(), time.Now(),
+		nil, nil, nil,
+	)
 	mock.ExpectQuery("SELECT a.id, r.owner_user_id").WithArgs(int64(7)).WillReturnRows(rows)
 
 	accounts, err := service.ListOwned(context.Background(), 7)

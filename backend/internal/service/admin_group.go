@@ -295,12 +295,55 @@ func groupSupportsOAuthOnlyFilter(platform string) bool {
 		platform == PlatformComposite
 }
 
+func normalizeAllowedOpenAIAccountLevels(platform string, levels []string) ([]string, error) {
+	if platform != PlatformOpenAI {
+		return []string{}, nil
+	}
+	seen := make(map[string]struct{}, len(levels))
+	out := make([]string, 0, len(levels))
+	for _, raw := range levels {
+		key := normalizeOpenAILevelKey(raw)
+		if key == "" || key == AccountLevelUnknown {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out, nil
+}
+
+func (s *adminServiceImpl) validateAllowedOpenAIAccountLevels(ctx context.Context, platform string, levels []string) ([]string, error) {
+	normalized, err := normalizeAllowedOpenAIAccountLevels(platform, levels)
+	if err != nil || len(normalized) == 0 || s == nil || s.settingService == nil || platform != PlatformOpenAI {
+		return normalized, err
+	}
+	allowed := make(map[string]struct{})
+	for _, cfg := range s.settingService.OpenAIAccountLevelConfigs(ctx) {
+		if cfg.Enabled {
+			allowed[cfg.Key] = struct{}{}
+		}
+	}
+	for _, level := range normalized {
+		if _, ok := allowed[level]; !ok {
+			return nil, fmt.Errorf("account level %q is not enabled in system settings", level)
+		}
+	}
+	return normalized, nil
+}
+
 func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error) {
 	if input.RateMultiplier <= 0 {
 		return nil, errors.New("rate_multiplier must be > 0")
 	}
 
 	platform := NormalizeGroupPlatform(input.Platform)
+	allowedAccountLevels, err := s.validateAllowedOpenAIAccountLevels(ctx, platform, input.AllowedOpenAIAccountLevels)
+	if err != nil {
+		return nil, err
+	}
 	maxReasoningEffort, err := normalizeMaxReasoningEffortForPlatform(platform, input.MaxReasoningEffort)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_MAX_REASONING_EFFORT", "%v", err)
@@ -496,6 +539,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		AllowLive:                       input.AllowLive,
 		RequireOAuthOnly:                input.RequireOAuthOnly,
 		RequirePrivacySet:               input.RequirePrivacySet,
+		AllowedOpenAIAccountLevels:      allowedAccountLevels,
 		DefaultMappedModel:              input.DefaultMappedModel,
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
 		ModelsListConfig:                normalizeGroupModelsListConfig(input.ModelsListConfig),
@@ -843,6 +887,13 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.RequirePrivacySet != nil {
 		group.RequirePrivacySet = *input.RequirePrivacySet
+	}
+	if input.AllowedOpenAIAccountLevels != nil {
+		levels, err := s.validateAllowedOpenAIAccountLevels(ctx, group.Platform, *input.AllowedOpenAIAccountLevels)
+		if err != nil {
+			return nil, err
+		}
+		group.AllowedOpenAIAccountLevels = levels
 	}
 	if input.DefaultMappedModel != nil {
 		group.DefaultMappedModel = *input.DefaultMappedModel

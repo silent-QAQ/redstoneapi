@@ -95,8 +95,9 @@ type Group struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       bool
 	AllowLive                   bool
-	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
-	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
+	RequireOAuthOnly            bool     // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
+	RequirePrivacySet           bool     // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
+	AllowedOpenAIAccountLevels  []string // OpenAI 分组允许参与调度的账号等级；空数组表示不限制
 	DefaultMappedModel          string
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
 	ModelsListConfig            GroupModelsListConfig
@@ -126,6 +127,21 @@ type Group struct {
 	AccountCount            int64
 	ActiveAccountCount      int64
 	RateLimitedAccountCount int64
+}
+
+// AllowsOpenAIAccountLevel reports whether an account level is eligible for this group.
+// Empty configuration keeps backward-compatible unrestricted scheduling.
+func (g *Group) AllowsOpenAIAccountLevel(level string) bool {
+	if g == nil || g.Platform != PlatformOpenAI || len(g.AllowedOpenAIAccountLevels) == 0 {
+		return true
+	}
+	level = normalizeOpenAILevelKey(level)
+	for _, allowed := range g.AllowedOpenAIAccountLevels {
+		if normalizeOpenAILevelKey(allowed) == level {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *Group) IsActive() bool {

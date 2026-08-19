@@ -164,6 +164,7 @@ type AccountBulkUpdate struct {
 	Status         *string
 	Schedulable    *bool
 	Credentials    map[string]any
+	AccountLevel   *string
 	Extra          map[string]any
 	ProbeEnabled   *bool
 }

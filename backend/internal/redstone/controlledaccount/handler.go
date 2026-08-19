@@ -8,21 +8,24 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	adminhandler "github.com/silent-QAQ/redstoneapi/internal/handler/admin"
 	"github.com/silent-QAQ/redstoneapi/internal/pkg/response"
 	"github.com/silent-QAQ/redstoneapi/internal/server/middleware"
 	"github.com/silent-QAQ/redstoneapi/internal/service"
-	"github.com/gin-gonic/gin"
 )
 
 // Handler exposes the administrator account-management surface under a
 // user-owned scope. The account handlers are shared; ownedAdminService injects
 // owner_user_id into creation and rejects cross-owner reads and mutations.
 type Handler struct {
-	service                 *Service
-	verifier                *AccountVerifier
-	scheduler               *VerificationScheduler
-	db                      interface{ QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error); QueryRowContext(context.Context, string, ...interface{}) *sql.Row }
+	service   *Service
+	verifier  *AccountVerifier
+	scheduler *VerificationScheduler
+	db        interface {
+		QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+		QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+	}
 	ownedAdminService       *ownedAdminService
 	ownedAccountHandler     *adminhandler.AccountHandler
 	ownedOAuthHandler       *adminhandler.OAuthHandler
@@ -42,7 +45,6 @@ type Handler struct {
 	oauthBindingStore       *oauthBindingStore
 	scheduledTestService    *service.ScheduledTestService
 	crsSyncService          *service.CRSSyncService
-
 }
 
 func NewHandler(service *Service) *Handler {
@@ -187,14 +189,14 @@ func (h *Handler) Verify(c *gin.Context) {
 
 	// 返回详细结果
 	response.Success(c, gin.H{
-		"account_id": result.AccountID,
+		"account_id": accountID,
 		"success":    result.Success,
 		"score":      result.Score,
 		"verdict":    result.Verdict,
 		"protocol":   result.Protocol,
 		"message":    result.Message,
 		"timestamp":  result.Timestamp,
-		"duration":   result.Duration.Milliseconds(),
+		"duration":   result.DurationMs,
 	})
 }
 
@@ -349,7 +351,6 @@ func writeAccountError(c *gin.Context, err error) {
 	}
 }
 
-
 // Start 启动验真调度器
 func (h *Handler) Start(ctx context.Context) {
 	if h.scheduler != nil {
@@ -363,5 +364,3 @@ func (h *Handler) Stop() {
 		h.scheduler.Stop()
 	}
 }
-
-

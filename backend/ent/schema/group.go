@@ -239,6 +239,10 @@ func (Group) Fields() []ent.Field {
 		field.Bool("require_privacy_set").
 			Default(false).
 			Comment("调度时仅允许 privacy 已成功设置的账号"),
+		field.JSON("allowed_account_levels", []string{}).
+			Default([]string{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("OpenAI 分组允许参与调度的账号等级；空数组表示不限制"),
 		field.String("default_mapped_model").
 			MaxLen(100).
 			Default("").

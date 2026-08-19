@@ -2291,6 +2291,7 @@ type AccountMutation struct {
 	name                        *string
 	notes                       *string
 	platform                    *string
+	account_level               *string
 	_type                       *string
 	owner_user_id               *int64
 	addowner_user_id            *int64
@@ -2678,6 +2679,42 @@ func (m *AccountMutation) OldPlatform(ctx context.Context) (v string, err error)
 // ResetPlatform resets all changes to the "platform" field.
 func (m *AccountMutation) ResetPlatform() {
 	m.platform = nil
+}
+
+// SetAccountLevel sets the "account_level" field.
+func (m *AccountMutation) SetAccountLevel(s string) {
+	m.account_level = &s
+}
+
+// AccountLevel returns the value of the "account_level" field in the mutation.
+func (m *AccountMutation) AccountLevel() (r string, exists bool) {
+	v := m.account_level
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccountLevel returns the old "account_level" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldAccountLevel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccountLevel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccountLevel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccountLevel: %w", err)
+	}
+	return oldValue.AccountLevel, nil
+}
+
+// ResetAccountLevel resets all changes to the "account_level" field.
+func (m *AccountMutation) ResetAccountLevel() {
+	m.account_level = nil
 }
 
 // SetType sets the "type" field.
@@ -4210,7 +4247,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 32)
+	fields := make([]string, 0, 33)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -4228,6 +4265,9 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.platform != nil {
 		fields = append(fields, account.FieldPlatform)
+	}
+	if m.account_level != nil {
+		fields = append(fields, account.FieldAccountLevel)
 	}
 	if m._type != nil {
 		fields = append(fields, account.FieldType)
@@ -4327,6 +4367,8 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.Notes()
 	case account.FieldPlatform:
 		return m.Platform()
+	case account.FieldAccountLevel:
+		return m.AccountLevel()
 	case account.FieldType:
 		return m.GetType()
 	case account.FieldOwnerUserID:
@@ -4400,6 +4442,8 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldNotes(ctx)
 	case account.FieldPlatform:
 		return m.OldPlatform(ctx)
+	case account.FieldAccountLevel:
+		return m.OldAccountLevel(ctx)
 	case account.FieldType:
 		return m.OldType(ctx)
 	case account.FieldOwnerUserID:
@@ -4502,6 +4546,13 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPlatform(v)
+		return nil
+	case account.FieldAccountLevel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccountLevel(v)
 		return nil
 	case account.FieldType:
 		v, ok := value.(string)
@@ -4937,6 +4988,9 @@ func (m *AccountMutation) ResetField(name string) error {
 		return nil
 	case account.FieldPlatform:
 		m.ResetPlatform()
+		return nil
+	case account.FieldAccountLevel:
+		m.ResetAccountLevel()
 		return nil
 	case account.FieldType:
 		m.ResetType()
@@ -22030,6 +22084,8 @@ type GroupMutation struct {
 	allow_live                              *bool
 	require_oauth_only                      *bool
 	require_privacy_set                     *bool
+	allowed_account_levels                  *[]string
+	appendallowed_account_levels            []string
 	default_mapped_model                    *string
 	messages_dispatch_model_config          *domain.OpenAIMessagesDispatchModelConfig
 	models_list_config                      *domain.GroupModelsListConfig
@@ -24785,6 +24841,57 @@ func (m *GroupMutation) ResetRequirePrivacySet() {
 	m.require_privacy_set = nil
 }
 
+// SetAllowedAccountLevels sets the "allowed_account_levels" field.
+func (m *GroupMutation) SetAllowedAccountLevels(s []string) {
+	m.allowed_account_levels = &s
+	m.appendallowed_account_levels = nil
+}
+
+// AllowedAccountLevels returns the value of the "allowed_account_levels" field in the mutation.
+func (m *GroupMutation) AllowedAccountLevels() (r []string, exists bool) {
+	v := m.allowed_account_levels
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAllowedAccountLevels returns the old "allowed_account_levels" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldAllowedAccountLevels(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAllowedAccountLevels is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAllowedAccountLevels requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAllowedAccountLevels: %w", err)
+	}
+	return oldValue.AllowedAccountLevels, nil
+}
+
+// AppendAllowedAccountLevels adds s to the "allowed_account_levels" field.
+func (m *GroupMutation) AppendAllowedAccountLevels(s []string) {
+	m.appendallowed_account_levels = append(m.appendallowed_account_levels, s...)
+}
+
+// AppendedAllowedAccountLevels returns the list of values that were appended to the "allowed_account_levels" field in this mutation.
+func (m *GroupMutation) AppendedAllowedAccountLevels() ([]string, bool) {
+	if len(m.appendallowed_account_levels) == 0 {
+		return nil, false
+	}
+	return m.appendallowed_account_levels, true
+}
+
+// ResetAllowedAccountLevels resets all changes to the "allowed_account_levels" field.
+func (m *GroupMutation) ResetAllowedAccountLevels() {
+	m.allowed_account_levels = nil
+	m.appendallowed_account_levels = nil
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (m *GroupMutation) SetDefaultMappedModel(s string) {
 	m.default_mapped_model = &s
@@ -25542,7 +25649,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 60)
+	fields := make([]string, 0, 61)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -25696,6 +25803,9 @@ func (m *GroupMutation) Fields() []string {
 	if m.require_privacy_set != nil {
 		fields = append(fields, group.FieldRequirePrivacySet)
 	}
+	if m.allowed_account_levels != nil {
+		fields = append(fields, group.FieldAllowedAccountLevels)
+	}
 	if m.default_mapped_model != nil {
 		fields = append(fields, group.FieldDefaultMappedModel)
 	}
@@ -25833,6 +25943,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.RequireOauthOnly()
 	case group.FieldRequirePrivacySet:
 		return m.RequirePrivacySet()
+	case group.FieldAllowedAccountLevels:
+		return m.AllowedAccountLevels()
 	case group.FieldDefaultMappedModel:
 		return m.DefaultMappedModel()
 	case group.FieldMessagesDispatchModelConfig:
@@ -25962,6 +26074,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldRequireOauthOnly(ctx)
 	case group.FieldRequirePrivacySet:
 		return m.OldRequirePrivacySet(ctx)
+	case group.FieldAllowedAccountLevels:
+		return m.OldAllowedAccountLevels(ctx)
 	case group.FieldDefaultMappedModel:
 		return m.OldDefaultMappedModel(ctx)
 	case group.FieldMessagesDispatchModelConfig:
@@ -26345,6 +26459,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetRequirePrivacySet(v)
+		return nil
+	case group.FieldAllowedAccountLevels:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAllowedAccountLevels(v)
 		return nil
 	case group.FieldDefaultMappedModel:
 		v, ok := value.(string)
@@ -27066,6 +27187,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldRequirePrivacySet:
 		m.ResetRequirePrivacySet()
+		return nil
+	case group.FieldAllowedAccountLevels:
+		m.ResetAllowedAccountLevels()
 		return nil
 	case group.FieldDefaultMappedModel:
 		m.ResetDefaultMappedModel()

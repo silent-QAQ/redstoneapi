@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/silent-QAQ/redstoneapi/internal/pkg/ctxkey"
 	"github.com/silent-QAQ/redstoneapi/internal/service"
 )
 
@@ -31,6 +32,8 @@ type noAccountErrorClassification struct {
 	Message       string
 	ModelNotFound bool // true when this is a 404 model_not_found classification
 }
+
+const sharingRoomMembershipRequiredMessage = "请在账号广场加入房间"
 
 // classifyNoAccountError decides between 404 model_not_found and 503
 // api_error for "no available accounts" failures.
@@ -74,6 +77,22 @@ func classifyNoAccountError(
 	displayModel = strings.TrimSpace(displayModel)
 	if displayModel == "" {
 		displayModel = routingModel
+	}
+	// 房间模式是严格隔离的：当选号池为空时，不能把请求伪装成普通
+	// 分组的暂时无账号。直接返回稳定错误码，客户端才能引导用户去账号广场入房。
+	if apiKey != nil && apiKey.SharingRoomID != nil && *apiKey.SharingRoomID > 0 {
+		return noAccountErrorClassification{
+			Status:  http.StatusForbidden,
+			ErrType: service.SharingRoomMembershipRequiredCode,
+			Message: sharingRoomMembershipRequiredMessage,
+		}
+	}
+	if roomID, _ := ctx.Value(ctxkey.SharingRoomID).(int64); roomID > 0 {
+		return noAccountErrorClassification{
+			Status:  http.StatusForbidden,
+			ErrType: service.SharingRoomMembershipRequiredCode,
+			Message: sharingRoomMembershipRequiredMessage,
+		}
 	}
 	if diag == nil || apiKey == nil || apiKey.GroupID == nil || routingModel == "" {
 		return fallback

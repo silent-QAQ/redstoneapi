@@ -118,6 +118,8 @@ const (
 	FieldRequireOauthOnly = "require_oauth_only"
 	// FieldRequirePrivacySet holds the string denoting the require_privacy_set field in the database.
 	FieldRequirePrivacySet = "require_privacy_set"
+	// FieldAllowedAccountLevels holds the string denoting the allowed_account_levels field in the database.
+	FieldAllowedAccountLevels = "allowed_account_levels"
 	// FieldDefaultMappedModel holds the string denoting the default_mapped_model field in the database.
 	FieldDefaultMappedModel = "default_mapped_model"
 	// FieldMessagesDispatchModelConfig holds the string denoting the messages_dispatch_model_config field in the database.
@@ -262,6 +264,7 @@ var Columns = []string{
 	FieldAllowLive,
 	FieldRequireOauthOnly,
 	FieldRequirePrivacySet,
+	FieldAllowedAccountLevels,
 	FieldDefaultMappedModel,
 	FieldMessagesDispatchModelConfig,
 	FieldModelsListConfig,
@@ -382,6 +385,8 @@ var (
 	DefaultRequireOauthOnly bool
 	// DefaultRequirePrivacySet holds the default value on creation for the "require_privacy_set" field.
 	DefaultRequirePrivacySet bool
+	// DefaultAllowedAccountLevels holds the default value on creation for the "allowed_account_levels" field.
+	DefaultAllowedAccountLevels []string
 	// DefaultDefaultMappedModel holds the default value on creation for the "default_mapped_model" field.
 	DefaultDefaultMappedModel string
 	// DefaultMappedModelValidator is a validator for the "default_mapped_model" field. It is called by the builders before save.

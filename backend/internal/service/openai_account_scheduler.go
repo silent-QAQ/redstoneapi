@@ -1412,6 +1412,10 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
+		if schedGroup != nil && !schedGroup.AllowsOpenAIAccountLevel(account.AccountLevel) {
+			filterStats.exclude("account_level_not_allowed")
+			continue
+		}
 		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
 		if schedGroup != nil && schedGroup.RequirePrivacySet && !account.IsPrivacySet() {
 			s.service.BlockAccountScheduling(account, time.Time{}, "privacy_not_set")

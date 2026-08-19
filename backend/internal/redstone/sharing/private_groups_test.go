@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -97,8 +96,8 @@ func TestSharingGroupAccessMigrationUsesUpstreamGroupTables(t *testing.T) {
 	require.NotContains(t, text, "CREATE TABLE api_keys")
 }
 
-func TestBindAccountRequiresPrivateGroup(t *testing.T) {
+func TestBindAccountAllowsAutomaticPrivateGroup(t *testing.T) {
 	err := (BindAccountRequest{OwnerUserID: 7, RoomID: 8, AccountID: 9}).Validate()
-	require.ErrorIs(t, err, ErrInvalidAccount)
-	require.True(t, strings.Contains(ErrPrivateGroupRequired.Error(), "private group"))
+	require.NoError(t, err)
+	require.ErrorIs(t, (BindAccountRequest{OwnerUserID: 7, RoomID: 8, AccountID: 9, PrivateGroupID: -1}).Validate(), ErrInvalidAccount)
 }
